@@ -40,7 +40,7 @@ export default function SearchBar({ value, onChange, resultCount, totalIndexed, 
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="Search village, parish, sub-county, district…"
+          placeholder="Type your village, parish, town or district…"
           autoFocus
           style={{
             width: '100%',

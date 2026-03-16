@@ -87,7 +87,7 @@ export default function App() {
               fontFamily: "'DM Sans', sans-serif",
             }}>
               <span>🇺🇬</span>
-              <span>84,000+ locations across Uganda</span>
+              <span>Filling a form? Find your village instantly</span>
             </div>
 
             <h1 style={{
@@ -105,8 +105,8 @@ export default function App() {
               </span>
             </h1>
 
-            <p style={{ color: 'rgba(240,234,214,0.45)', fontSize: '15px', maxWidth: '400px', margin: '0 auto', lineHeight: 1.6 }}>
-              Search any village, parish, sub-county, county or district — get its full location hierarchy instantly.
+            <p style={{ color: 'rgba(240,234,214,0.45)', fontSize: '15px', maxWidth: '440px', margin: '0 auto', lineHeight: 1.6 }}>
+              Find your village, parish, sub-county and district — perfect for NIN registration, NIRA, KCCA forms and any official document.
             </p>
           </div>
         )}
@@ -265,10 +265,10 @@ export default function App() {
               <div style={{ marginTop: '60px', textAlign: 'center' }}>
                 <div style={{ fontSize: '52px', marginBottom: '16px' }}>🗺️</div>
                 <p style={{ fontFamily: "'Syne', sans-serif", fontSize: '18px', fontWeight: 600, color: 'rgba(240,234,214,0.40)', marginBottom: '8px' }}>
-                  Start typing to explore Uganda
+                  Type your village or area name
                 </p>
                 <p style={{ fontSize: '13px', color: 'rgba(240,234,214,0.22)' }}>
-                  {totalIndexed.toLocaleString()} locations · or tap <em>Use my location</em>
+                  {totalIndexed.toLocaleString()} villages, parishes & districts · or tap <em>Use my location</em>
                 </p>
               </div>
             )}
