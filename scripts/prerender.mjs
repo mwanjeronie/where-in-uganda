@@ -1,6 +1,8 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { assignSubCountySlugs, districtTitle, slugify, subCountyTitle } from '../src/utils/placeSlugs.ts';
+import { assignGroupedSlugs, assignSubCountySlugs, districtTitle, parishTitle, slugify, subCountyTitle } from '../src/utils/placeSlugs.ts';
+
+const prerenderStarted = performance.now();
 
 const ORIGIN = 'https://uganda.winjo.xyz';
 const root = join(import.meta.dirname, '..');
@@ -39,6 +41,10 @@ function jsonScript(data) {
   return `<script type="application/ld+json">\n${json}\n    </script>`;
 }
 
+function jsonLdBlock(items) {
+  return items.map((entry) => `    ${jsonScript(entry)}`).join('\n');
+}
+
 function breadcrumbList(items) {
   return {
     '@context': 'https://schema.org',
@@ -55,66 +61,7 @@ function breadcrumbList(items) {
   };
 }
 
-function applyHead(html, { title, description, url, jsonLd }) {
-  let next = html;
-  next = replaceOnce(next, /<title>[\s\S]*?<\/title>/, `<title>${escapeHtml(title)}</title>`, 'title');
-  next = replaceOnce(
-    next,
-    /<meta name="description" content="[^"]*" \/>/,
-    `<meta name="description" content="${escapeHtml(description)}" />`,
-    'description',
-  );
-  next = replaceOnce(
-    next,
-    /<link rel="canonical" href="[^"]*" \/>/,
-    `<link rel="canonical" href="${escapeHtml(url)}" />`,
-    'canonical',
-  );
-  next = replaceOnce(
-    next,
-    /<meta property="og:url" content="[^"]*" \/>/,
-    `<meta property="og:url" content="${escapeHtml(url)}" />`,
-    'og:url',
-  );
-  next = replaceOnce(
-    next,
-    /<meta property="og:title" content="[^"]*" \/>/,
-    `<meta property="og:title" content="${escapeHtml(title)}" />`,
-    'og:title',
-  );
-  next = replaceOnce(
-    next,
-    /<meta property="og:description" content="[^"]*" \/>/,
-    `<meta property="og:description" content="${escapeHtml(description)}" />`,
-    'og:description',
-  );
-  next = replaceOnce(
-    next,
-    /<meta name="twitter:url" content="[^"]*" \/>/,
-    `<meta name="twitter:url" content="${escapeHtml(url)}" />`,
-    'twitter:url',
-  );
-  next = replaceOnce(
-    next,
-    /<meta name="twitter:title" content="[^"]*" \/>/,
-    `<meta name="twitter:title" content="${escapeHtml(title)}" />`,
-    'twitter:title',
-  );
-  next = replaceOnce(
-    next,
-    /<meta name="twitter:description" content="[^"]*" \/>/,
-    `<meta name="twitter:description" content="${escapeHtml(description)}" />`,
-    'twitter:description',
-  );
-
-  const withoutLd = next.replace(/\s*<script type="application\/ld\+json">[\s\S]*?<\/script>/g, '');
-  if (withoutLd === next || withoutLd.includes('FAQPage') || withoutLd.includes('WebApplication')) {
-    throw new Error('Could not remove the homepage JSON-LD from the district template');
-  }
-  next = withoutLd;
-
-  const structured = jsonLd.map((entry) => `    ${jsonScript(entry)}`).join('\n');
-  const style = `    <style>
+const PAGE_STYLE = `    <style>
       .district-static { max-width: 720px; margin: 0 auto; padding: 32px 16px 72px; font-family: "DM Sans", sans-serif; line-height: 1.55; }
       .district-static h1 { font-family: Syne, sans-serif; font-size: clamp(32px, 6vw, 48px); line-height: 1.1; margin: 12px 0 16px; }
       .district-static h2 { font-family: Syne, sans-serif; font-size: 22px; margin: 28px 0 8px; }
@@ -125,18 +72,94 @@ function applyHead(html, { title, description, url, jsonLd }) {
       .district-index { columns: 2; padding-left: 1.2em; }
       @media (max-width: 600px) { .district-index { columns: 1; } }
     </style>`;
-  next = replaceOnce(next, /<\/head>/, `${structured}\n${style}\n  </head>`, 'head close');
-  return next;
-}
 
-function replaceRoot(html, inner) {
+const TOKEN = {
+  title: '\u0000TITLE\u0000',
+  description: '\u0000DESCRIPTION\u0000',
+  url: '\u0000URL\u0000',
+  jsonld: '\u0000JSONLD\u0000',
+  root: '\u0000ROOT\u0000',
+};
+
+function compileTemplate(template) {
+  let html = template;
+  html = replaceOnce(html, /<title>[\s\S]*?<\/title>/, `<title>${TOKEN.title}</title>`, 'title');
+  html = replaceOnce(
+    html,
+    /<meta name="description" content="[^"]*" \/>/,
+    `<meta name="description" content="${TOKEN.description}" />`,
+    'description',
+  );
+  html = replaceOnce(
+    html,
+    /<link rel="canonical" href="[^"]*" \/>/,
+    `<link rel="canonical" href="${TOKEN.url}" />`,
+    'canonical',
+  );
+  html = replaceOnce(
+    html,
+    /<meta property="og:url" content="[^"]*" \/>/,
+    `<meta property="og:url" content="${TOKEN.url}" />`,
+    'og:url',
+  );
+  html = replaceOnce(
+    html,
+    /<meta property="og:title" content="[^"]*" \/>/,
+    `<meta property="og:title" content="${TOKEN.title}" />`,
+    'og:title',
+  );
+  html = replaceOnce(
+    html,
+    /<meta property="og:description" content="[^"]*" \/>/,
+    `<meta property="og:description" content="${TOKEN.description}" />`,
+    'og:description',
+  );
+  html = replaceOnce(
+    html,
+    /<meta name="twitter:url" content="[^"]*" \/>/,
+    `<meta name="twitter:url" content="${TOKEN.url}" />`,
+    'twitter:url',
+  );
+  html = replaceOnce(
+    html,
+    /<meta name="twitter:title" content="[^"]*" \/>/,
+    `<meta name="twitter:title" content="${TOKEN.title}" />`,
+    'twitter:title',
+  );
+  html = replaceOnce(
+    html,
+    /<meta name="twitter:description" content="[^"]*" \/>/,
+    `<meta name="twitter:description" content="${TOKEN.description}" />`,
+    'twitter:description',
+  );
+
+  const withoutLd = html.replace(/\s*<script type="application\/ld\+json">[\s\S]*?<\/script>/g, '');
+  if (withoutLd === html || withoutLd.includes('FAQPage') || withoutLd.includes('WebApplication')) {
+    throw new Error('Could not remove the homepage JSON-LD from the district template');
+  }
+  html = withoutLd;
+  html = replaceOnce(html, /<\/head>/, `${TOKEN.jsonld}\n${PAGE_STYLE}\n  </head>`, 'head close');
+
   const open = '<div id="root">';
   const start = html.indexOf(open);
   if (start < 0) throw new Error('dist/index.html is missing #root');
   const innerStart = start + open.length;
   const end = html.indexOf('</div>', innerStart);
   if (end < 0) throw new Error('dist/index.html is missing the #root close');
-  return `${html.slice(0, innerStart)}\n${inner}\n    ${html.slice(end)}`;
+  html = `${html.slice(0, innerStart)}\n${TOKEN.root}\n    ${html.slice(end)}`;
+  if (!html.includes('<script type="module"')) {
+    throw new Error('Compiled template is missing the app script');
+  }
+  return html;
+}
+
+function renderPage(shell, { title, description, url, jsonLd, body }) {
+  return shell
+    .replaceAll(TOKEN.title, title)
+    .replaceAll(TOKEN.description, description)
+    .replaceAll(TOKEN.url, url)
+    .replaceAll(TOKEN.jsonld, jsonLd)
+    .replaceAll(TOKEN.root, body);
 }
 
 function list(items) {
@@ -176,7 +199,7 @@ function subCountyBody(sub, district) {
         ? 'No villages are listed for this parish.'
         : parish.villages.map((name) => escapeHtml(name)).join(', ');
       return `        <section>
-          <h3>${escapeHtml(parish.name)}</h3>
+          <h3><a href="/district/${district.slug}/${sub.slug}/${parish.slug}">${escapeHtml(parish.name)}</a></h3>
           <p class="villages">${villages}</p>
         </section>`;
     }).join('\n');
@@ -186,6 +209,32 @@ function subCountyBody(sub, district) {
         <p>${escapeHtml(subCountyDescription(sub, district.name))}</p>
         <h2>Parishes and villages</h2>
 ${parishBlocks}
+      </main>`;
+}
+
+function parishHeading(parish, sub, district) {
+  return `${parish.name} Parish, ${sub.name}, ${district.name} District`;
+}
+
+function parishDescription(parish, sub, district) {
+  return `${parish.name} Parish in ${sub.name}, ${district.name} District has ${countPhrase(parish.villages.length, 'village', 'villages')}.`;
+}
+
+function parishFormLine(parish, sub, district) {
+  return `For a NIN or NIRA registration, or a school form, use a village name from this list, with ${parish.name} as the parish, ${sub.name} as the sub-county, ${sub.countyName} as the county, and ${district.name} as the district.`;
+}
+
+function parishBody(parish, sub, district) {
+  const villages = parish.villages.length === 0
+    ? 'No villages are listed for this parish.'
+    : parish.villages.map((name) => escapeHtml(name)).join(', ');
+  return `      <main class="district-static">
+        <p><a href="/">Uganda</a> · <a href="/district/${district.slug}">${escapeHtml(district.name)} District</a> · ${escapeHtml(sub.countyName)} · <a href="/district/${district.slug}/${sub.slug}">${escapeHtml(sub.name)}</a> · ${escapeHtml(parish.name)}</p>
+        <h1>${escapeHtml(parishHeading(parish, sub, district))}</h1>
+        <p>${escapeHtml(parishDescription(parish, sub, district))}</p>
+        <p>${escapeHtml(parishFormLine(parish, sub, district))}</p>
+        <h2>Villages</h2>
+        <p class="villages">${villages}</p>
       </main>`;
 }
 
@@ -240,6 +289,7 @@ const template = readFileSync(templatePath, 'utf8');
 if (!/<script type="module"/.test(template)) {
   throw new Error('dist/index.html is missing the app script. Run vite build first.');
 }
+const shell = compileTemplate(template);
 
 const sourceDistricts = loadJson('districts.json');
 const sourceCounties = loadJson('counties.json');
@@ -294,12 +344,30 @@ const districts = sourceDistricts.map((district) => {
       if (!assigned || assigned.districtSlug !== slug) {
         throw new Error(`Missing slug for ${sub.name} in ${district.name}`);
       }
-      const parishes = (parishesBySub.get(String(sub.id)) ?? [])
-        .map((parish) => ({
+      const rawParishes = parishesBySub.get(String(sub.id)) ?? [];
+      const parishSlugById = assignGroupedSlugs(
+        rawParishes.map((parish) => ({
+          id: String(parish.id),
           name: parish.name,
+          group: `${slug}/${assigned.subSlug}`,
+        })),
+        'parish',
+      );
+      const parishes = rawParishes
+        .map((parish) => ({
+          id: String(parish.id),
+          name: parish.name,
+          slug: parishSlugById.get(String(parish.id)),
           villages: (villagesByParish.get(String(parish.id)) ?? []).slice().sort((a, b) => a.localeCompare(b, 'en')),
         }))
-        .sort((a, b) => a.name.localeCompare(b.name, 'en'));
+        .sort((a, b) => a.name.localeCompare(b.name, 'en') || a.id.localeCompare(b.id, 'en'));
+      if (parishes.some((parish) => !parish.slug)) {
+        throw new Error(`Missing parish slug under ${sub.name} in ${district.name}`);
+      }
+      const parishSlugs = new Set(parishes.map((parish) => parish.slug));
+      if (parishSlugs.size !== parishes.length) {
+        throw new Error(`Duplicate parish slug under ${sub.name} in ${district.name}`);
+      }
       const subVillageCount = parishes.reduce((sum, parish) => sum + parish.villages.length, 0);
       subCounties.push({
         name: sub.name,
@@ -325,15 +393,19 @@ districts.sort((a, b) => a.name.localeCompare(b.name, 'en'));
 let addedBytes = 0;
 let subCountyBytes = 0;
 let subCountyPages = 0;
+let parishBytes = 0;
+let parishPages = 0;
+const subCountyUrls = [];
+const parishUrls = [];
 for (const district of districts) {
   const url = `${ORIGIN}/district/${district.slug}`;
   const title = districtTitle(district.name);
   const description = districtDescription(district);
-  let html = applyHead(template, {
-    title,
-    description,
+  const html = renderPage(shell, {
+    title: escapeHtml(title),
+    description: escapeHtml(description),
     url,
-    jsonLd: [
+    jsonLd: jsonLdBlock([
       breadcrumbList([
         { name: 'Where in Uganda?', url: `${ORIGIN}/` },
         { name: 'Districts', url: `${ORIGIN}/districts` },
@@ -349,21 +421,21 @@ for (const district of districts) {
           name: 'Uganda',
         },
       },
-    ],
+    ]),
+    body: districtBody(district),
   });
-  html = replaceRoot(html, districtBody(district));
-  html = finishPage(html, `<h1>${escapeHtml(district.name)} District, Uganda</h1>`);
+  finishPage(html, `<h1>${escapeHtml(district.name)} District, Uganda</h1>`);
   addedBytes += writePage(join('district', district.slug, 'index.html'), html);
 
   for (const sub of district.subCounties) {
     const url = `${ORIGIN}/district/${district.slug}/${sub.slug}`;
     const title = subCountyTitle(sub.name, sub.countyName, district.name);
     const description = subCountyDescription(sub, district.name);
-    let subHtml = applyHead(template, {
-      title,
-      description,
+    const subHtml = renderPage(shell, {
+      title: escapeHtml(title),
+      description: escapeHtml(description),
       url,
-      jsonLd: [
+      jsonLd: jsonLdBlock([
         breadcrumbList([
           { name: 'Uganda', url: `${ORIGIN}/` },
           { name: `${district.name} District`, url: `${ORIGIN}/district/${district.slug}` },
@@ -389,61 +461,131 @@ for (const district of districts) {
             },
           },
         },
-      ],
+      ]),
+      body: subCountyBody(sub, district),
     });
-    subHtml = replaceRoot(subHtml, subCountyBody(sub, district));
-    subHtml = finishPage(subHtml, `<h1>${escapeHtml(subCountyHeading(sub, district.name))}</h1>`);
+    finishPage(subHtml, `<h1>${escapeHtml(subCountyHeading(sub, district.name))}</h1>`);
     const bytes = writePage(join('district', district.slug, sub.slug, 'index.html'), subHtml);
     addedBytes += bytes;
     subCountyBytes += bytes;
     subCountyPages += 1;
+    subCountyUrls.push(url);
+
+    for (const parish of sub.parishes) {
+      const parishUrl = `${url}/${parish.slug}`;
+      const parishHtml = renderPage(shell, {
+        title: escapeHtml(parishTitle(parish.name, sub.name, district.name)),
+        description: escapeHtml(parishDescription(parish, sub, district)),
+        url: parishUrl,
+        jsonLd: jsonLdBlock([
+          breadcrumbList([
+            { name: 'Uganda', url: `${ORIGIN}/` },
+            { name: `${district.name} District`, url: `${ORIGIN}/district/${district.slug}` },
+            { name: sub.countyName },
+            { name: `${sub.name} Sub-county`, url },
+            { name: `${parish.name} Parish`, url: parishUrl },
+          ]),
+          {
+            '@context': 'https://schema.org',
+            '@type': 'AdministrativeArea',
+            name: `${parish.name} Parish`,
+            url: parishUrl,
+            containedInPlace: {
+              '@type': 'AdministrativeArea',
+              name: `${sub.name} Sub-county`,
+              url,
+              containedInPlace: {
+                '@type': 'AdministrativeArea',
+                name: sub.countyName,
+                containedInPlace: {
+                  '@type': 'AdministrativeArea',
+                  name: `${district.name} District`,
+                  url: `${ORIGIN}/district/${district.slug}`,
+                  containedInPlace: {
+                    '@type': 'Country',
+                    name: 'Uganda',
+                  },
+                },
+              },
+            },
+          },
+        ]),
+        body: parishBody(parish, sub, district),
+      });
+      finishPage(parishHtml, `<h1>${escapeHtml(parishHeading(parish, sub, district))}</h1>`);
+      const parishSize = writePage(join('district', district.slug, sub.slug, parish.slug, 'index.html'), parishHtml);
+      addedBytes += parishSize;
+      parishBytes += parishSize;
+      parishPages += 1;
+      parishUrls.push(parishUrl);
+    }
   }
 }
 
 const indexTitle = 'Districts in Uganda | Where in Uganda?';
 const indexDescription = `All ${districts.length.toLocaleString('en-US')} districts, with a page for each district's counties and sub-counties.`;
-let indexHtml = applyHead(template, {
-  title: indexTitle,
-  description: indexDescription,
+const indexHtml = renderPage(shell, {
+  title: escapeHtml(indexTitle),
+  description: escapeHtml(indexDescription),
   url: `${ORIGIN}/districts`,
-  jsonLd: [
+  jsonLd: jsonLdBlock([
     breadcrumbList([
       { name: 'Where in Uganda?', url: `${ORIGIN}/` },
       { name: 'Districts', url: `${ORIGIN}/districts` },
     ]),
-  ],
+  ]),
+  body: indexBody(districts),
 });
-indexHtml = replaceRoot(indexHtml, indexBody(districts));
-indexHtml = finishPage(indexHtml, '<h1>Districts in Uganda</h1>');
+finishPage(indexHtml, '<h1>Districts in Uganda</h1>');
 addedBytes += writePage(join('districts', 'index.html'), indexHtml);
 
-const sitemapPath = join(dist, 'sitemap.xml');
-const previousSitemap = statSync(sitemapPath, { throwIfNoEntry: false })?.size ?? 0;
-const urls = [
-  `${ORIGIN}/`,
-  `${ORIGIN}/districts`,
-];
-for (const district of districts) {
-  urls.push(`${ORIGIN}/district/${district.slug}`);
-  for (const sub of district.subCounties) {
-    urls.push(`${ORIGIN}/district/${district.slug}/${sub.slug}`);
-  }
-}
-const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
+function urlset(locs) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${urls.map((loc) => `  <url>\n    <loc>${loc}</loc>\n  </url>`).join('\n')}
+${locs.map((loc) => `  <url>\n    <loc>${loc}</loc>\n  </url>`).join('\n')}
 </urlset>
 `;
-writeFileSync(sitemapPath, sitemap);
-addedBytes += Buffer.byteLength(sitemap) - previousSitemap;
+}
+
+const districtUrls = [
+  `${ORIGIN}/`,
+  `${ORIGIN}/districts`,
+  ...districts.map((district) => `${ORIGIN}/district/${district.slug}`),
+];
+const sitemapFiles = {
+  'sitemap-districts.xml': urlset(districtUrls),
+  'sitemap-subcounties.xml': urlset(subCountyUrls),
+  'sitemap-parishes.xml': urlset(parishUrls),
+};
+const sitemapIndex = `<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${Object.keys(sitemapFiles).map((name) => `  <sitemap>\n    <loc>${ORIGIN}/${name}</loc>\n  </sitemap>`).join('\n')}
+</sitemapindex>
+`;
+const previousSitemap = statSync(join(dist, 'sitemap.xml'), { throwIfNoEntry: false })?.size ?? 0;
+let sitemapBytes = Buffer.byteLength(sitemapIndex) - previousSitemap;
+writeFileSync(join(dist, 'sitemap.xml'), sitemapIndex);
+for (const [name, xml] of Object.entries(sitemapFiles)) {
+  writeFileSync(join(dist, name), xml);
+  sitemapBytes += Buffer.byteLength(xml);
+}
+addedBytes += sitemapBytes;
 
 const summary = {
   districtPages: districts.length,
   subCountyPages,
   subCountyBytes,
+  parishPages,
+  parishBytes,
   indexPages: 1,
-  sitemapUrls: urls.length,
+  sitemap: {
+    districts: districtUrls.length,
+    subcounties: subCountyUrls.length,
+    parishes: parishUrls.length,
+    total: districtUrls.length + subCountyUrls.length + parishUrls.length,
+  },
   addedBytes,
+  prerenderMs: Math.round(performance.now() - prerenderStarted),
 };
 for (const name of ['Wakiso', 'Kampala', 'Abim']) {
   const district = districts.find((item) => item.name === name);

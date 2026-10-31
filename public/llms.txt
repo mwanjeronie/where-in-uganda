@@ -9,6 +9,7 @@ Where in Uganda? helps people fill in the place names asked for on NIN and NIRA 
 - [Home](https://uganda.winjo.xyz/): search every place in the directory
 - [Districts](https://uganda.winjo.xyz/districts): all districts, each linking to its counties and sub-counties
 - District: https://uganda.winjo.xyz/district/<district-slug>
-- Sub-county: https://uganda.winjo.xyz/district/<district-slug>/<sub-county-slug> lists that sub-county's parishes, with the villages in each parish written on the same page
+- Sub-county: https://uganda.winjo.xyz/district/<district-slug>/<sub-county-slug> lists that sub-county's parishes
+- Parish: https://uganda.winjo.xyz/district/<district-slug>/<sub-county-slug>/<parish-slug> lists that parish's villages
 
-Slugs are lowercase and hyphenated. When the same sub-county name occurs more than once in a district, the county name is included in the sub-county slug so each page has its own URL.
+Slugs are lowercase and hyphenated. When the same sub-county name occurs more than once in a district, the county name is included in the sub-county slug. When the same parish name occurs more than once in a sub-county, the later page adds a number to the parish slug.

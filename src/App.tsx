@@ -6,7 +6,7 @@ import DetailView from './components/DetailView';
 import Credits from './components/Credits';
 import { useGeolocation } from './hooks/useGeolocation';
 import { search, loadIndex, getIndex, type LocationEntry, type LocationType } from './utils/search';
-import { assignSubCountySlugs, districtTitle, slugify, subCountyTitle, type AssignedSubCountySlug } from './utils/placeSlugs.ts';
+import { assignGroupedSlugs, assignSubCountySlugs, districtTitle, parishTitle, slugify, subCountyTitle, type AssignedSubCountySlug } from './utils/placeSlugs.ts';
 
 type FilterOption = LocationType | 'all';
 type View =
@@ -17,8 +17,9 @@ type Route =
   | { kind: 'search' }
   | { kind: 'districts' }
   | { kind: 'district'; slug: string }
-  | { kind: 'subcounty'; districtSlug: string; subSlug: string };
-type HistoryState = { district?: string; subcounty?: string } | null;
+  | { kind: 'subcounty'; districtSlug: string; subSlug: string }
+  | { kind: 'parish'; districtSlug: string; subSlug: string; parishSlug: string };
+type HistoryState = { district?: string; subcounty?: string; parish?: string } | null;
 
 const HOME_TITLE = 'Where in Uganda? — Find Your Village, Parish & Sub-county for Documents';
 
@@ -29,8 +30,9 @@ function normalizePath(pathname: string): string {
 function readRoute(pathname: string): Route {
   const path = normalizePath(pathname);
   if (path === '/districts') return { kind: 'districts' };
-  const match = path.match(/^\/district\/([a-z0-9-]+)(?:\/([a-z0-9-]+))?$/);
+  const match = path.match(/^\/district\/([a-z0-9-]+)(?:\/([a-z0-9-]+)(?:\/([a-z0-9-]+))?)?$/);
   if (!match) return { kind: 'search' };
+  if (match[3]) return { kind: 'parish', districtSlug: match[1], subSlug: match[2], parishSlug: match[3] };
   if (match[2]) return { kind: 'subcounty', districtSlug: match[1], subSlug: match[2] };
   return { kind: 'district', slug: match[1] };
 }
@@ -47,6 +49,11 @@ function subCountyRecords(index: LocationEntry[]) {
 }
 
 let subCountySlugCache: { index: LocationEntry[]; slugs: Map<string, AssignedSubCountySlug> } | null = null;
+let parishSlugCache: {
+  index: LocationEntry[];
+  slugs: Map<string, string>;
+  parents: Map<string, AssignedSubCountySlug>;
+} | null = null;
 
 function subCountySlugs(index: LocationEntry[]) {
   if (subCountySlugCache?.index === index) return subCountySlugCache.slugs;
@@ -68,17 +75,66 @@ function findSubCounty(index: LocationEntry[], districtSlug: string, subSlug: st
   });
 }
 
+function parentKey(districtName: string, countyName: string, subCountyName: string): string {
+  return `${districtName}\0${countyName}\0${subCountyName}`;
+}
+
+function parishSlugIndex(index: LocationEntry[]) {
+  if (parishSlugCache?.index === index) return parishSlugCache;
+  const subSlugs = subCountySlugs(index);
+  const parents = new Map<string, AssignedSubCountySlug>();
+  for (const entry of index) {
+    if (entry.type !== 'sub_county') continue;
+    const assigned = subSlugs.get(entry.id);
+    if (!assigned) continue;
+    parents.set(parentKey(entry.breadcrumb[0] || entry.districtName, entry.breadcrumb[1] ?? '', entry.name), assigned);
+  }
+  const records = [];
+  for (const entry of index) {
+    if (entry.type !== 'parish') continue;
+    const parent = parents.get(parentKey(entry.breadcrumb[0] || entry.districtName, entry.breadcrumb[1] ?? '', entry.breadcrumb[2] ?? ''));
+    records.push({
+      id: entry.id,
+      name: entry.name,
+      group: parent ? `${parent.districtSlug}/${parent.subSlug}` : `missing/${entry.id}`,
+    });
+  }
+  parishSlugCache = { index, slugs: assignGroupedSlugs(records, 'parish'), parents };
+  return parishSlugCache;
+}
+
+function parishParent(entry: LocationEntry, index: LocationEntry[]): AssignedSubCountySlug | undefined {
+  return parishSlugIndex(index).parents.get(
+    parentKey(entry.breadcrumb[0] || entry.districtName, entry.breadcrumb[1] ?? '', entry.breadcrumb[2] ?? ''),
+  );
+}
+
+function findParish(index: LocationEntry[], districtSlug: string, subSlug: string, parishSlug: string): LocationEntry | undefined {
+  const slugs = parishSlugIndex(index).slugs;
+  return index.find((entry) => {
+    if (entry.type !== 'parish' || slugs.get(entry.id) !== parishSlug) return false;
+    const parent = parishParent(entry, index);
+    return parent?.districtSlug === districtSlug && parent.subSlug === subSlug;
+  });
+}
+
 function pathForEntry(entry: LocationEntry, index: LocationEntry[]): string | null {
   if (entry.type === 'district') return `/district/${slugify(entry.name)}`;
-  if (entry.type !== 'sub_county') return null;
-  const assigned = subCountySlugs(index).get(entry.id);
-  return assigned ? `/district/${assigned.districtSlug}/${assigned.subSlug}` : null;
+  if (entry.type === 'sub_county') {
+    const assigned = subCountySlugs(index).get(entry.id);
+    return assigned ? `/district/${assigned.districtSlug}/${assigned.subSlug}` : null;
+  }
+  if (entry.type !== 'parish') return null;
+  const parent = parishParent(entry, index);
+  const parishSlug = parishSlugIndex(index).slugs.get(entry.id);
+  return parent && parishSlug ? `/district/${parent.districtSlug}/${parent.subSlug}/${parishSlug}` : null;
 }
 
 function historyStateFor(url: string): HistoryState {
   const route = readRoute(url);
   if (route.kind === 'district') return { district: route.slug };
   if (route.kind === 'subcounty') return { district: route.districtSlug, subcounty: route.subSlug };
+  if (route.kind === 'parish') return { district: route.districtSlug, subcounty: route.subSlug, parish: route.parishSlug };
   return null;
 }
 
@@ -86,8 +142,11 @@ function pushedStateMatches(pathname: string): boolean {
   const route = readRoute(pathname);
   const state = window.history.state as HistoryState;
   if (!state) return false;
-  if (route.kind === 'district') return state.district === route.slug && !state.subcounty;
-  if (route.kind === 'subcounty') return state.district === route.districtSlug && state.subcounty === route.subSlug;
+  if (route.kind === 'district') return state.district === route.slug && !state.subcounty && !state.parish;
+  if (route.kind === 'subcounty') return state.district === route.districtSlug && state.subcounty === route.subSlug && !state.parish;
+  if (route.kind === 'parish') {
+    return state.district === route.districtSlug && state.subcounty === route.subSlug && state.parish === route.parishSlug;
+  }
   return false;
 }
 
@@ -107,6 +166,11 @@ function syncDocumentTitle(index: LocationEntry[] | null) {
     if (entry) document.title = subCountyTitle(entry.name, entry.breadcrumb[1] ?? '', entry.districtName);
     return;
   }
+  if (route.kind === 'parish') {
+    const entry = index ? findParish(index, route.districtSlug, route.subSlug, route.parishSlug) : undefined;
+    if (entry) document.title = parishTitle(entry.name, entry.breadcrumb[2] ?? '', entry.districtName);
+    return;
+  }
   document.title = HOME_TITLE;
 }
 
@@ -120,6 +184,10 @@ function viewForPath(index: LocationEntry[] | null): View {
   }
   if (route.kind === 'subcounty') {
     const entry = findSubCounty(index, route.districtSlug, route.subSlug);
+    return entry ? { kind: 'detail', entry, history: [] } : { kind: 'search' };
+  }
+  if (route.kind === 'parish') {
+    const entry = findParish(index, route.districtSlug, route.subSlug, route.parishSlug);
     return entry ? { kind: 'detail', entry, history: [] } : { kind: 'search' };
   }
   return { kind: 'search' };
@@ -185,14 +253,16 @@ export default function App() {
       return { kind: 'detail', entry, history: [] };
     });
     const index = getIndex();
-    if (index && (entry.type === 'district' || entry.type === 'sub_county')) {
+    if (index && (entry.type === 'district' || entry.type === 'sub_county' || entry.type === 'parish')) {
       const url = pathForEntry(entry, index);
       if (url && normalizePath(window.location.pathname) !== url) {
         window.history.pushState(historyStateFor(url), '', url);
       }
       document.title = entry.type === 'district'
         ? districtTitle(entry.name)
-        : subCountyTitle(entry.name, entry.breadcrumb[1] ?? '', entry.districtName);
+        : entry.type === 'sub_county'
+          ? subCountyTitle(entry.name, entry.breadcrumb[1] ?? '', entry.districtName)
+          : parishTitle(entry.name, entry.breadcrumb[2] ?? '', entry.districtName);
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -237,7 +307,7 @@ export default function App() {
   }
 
   const route = readRoute(window.location.pathname);
-  const waitingForPlace = (route.kind === 'district' || route.kind === 'subcounty') && !indexLoaded && !indexError && view.kind !== 'detail';
+  const waitingForPlace = (route.kind === 'district' || route.kind === 'subcounty' || route.kind === 'parish') && !indexLoaded && !indexError && view.kind !== 'detail';
   const showSearch = view.kind === 'search' && !waitingForPlace;
   const showNearYou = geoState === 'done' && geoResult && !debouncedQuery.trim();
 
@@ -329,7 +399,7 @@ export default function App() {
 
         {waitingForPlace && (
           <p style={{ paddingTop: '48px', textAlign: 'center', color: 'rgba(240,234,214,0.45)' }}>
-            Loading district…
+            Loading place…
           </p>
         )}
 

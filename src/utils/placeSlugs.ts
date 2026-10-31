@@ -23,6 +23,50 @@ export function subCountyTitle(name: string, countyName: string, districtName: s
   return `${name} Sub-county, ${countyName}, ${districtName} District: parishes and villages | Where in Uganda?`;
 }
 
+export function parishTitle(name: string, subCountyName: string, districtName: string): string {
+  return `${name} Parish, ${subCountyName}, ${districtName} District: villages | Where in Uganda?`;
+}
+
+export type GroupedSlugRecord = {
+  id: string;
+  name: string;
+  group: string;
+};
+
+/**
+ * Slugs are unique inside each group. The first name keeps the plain slug;
+ * a repeated name gets -2, -3, and so on. Id sort ignores a prefix such as "p-".
+ */
+export function assignGroupedSlugs(records: GroupedSlugRecord[], fallback: string): Map<string, string> {
+  const byGroup = new Map<string, GroupedSlugRecord[]>();
+  for (const record of records) {
+    const list = byGroup.get(record.group);
+    if (list) list.push(record);
+    else byGroup.set(record.group, [record]);
+  }
+
+  const assigned = new Map<string, string>();
+  for (const list of byGroup.values()) {
+    const used = new Set<string>();
+    const sorted = list.slice().sort((a, b) =>
+      a.name.localeCompare(b.name, 'en')
+      || idSortKey(a.id).localeCompare(idSortKey(b.id), 'en'),
+    );
+    for (const record of sorted) {
+      const base = slugify(record.name) || fallback;
+      let slug = base;
+      if (used.has(slug)) {
+        let n = 2;
+        while (used.has(`${base}-${n}`)) n += 1;
+        slug = `${base}-${n}`;
+      }
+      used.add(slug);
+      assigned.set(String(record.id), slug);
+    }
+  }
+  return assigned;
+}
+
 function idSortKey(id: string): string {
   const match = String(id).match(/(\d+)$/);
   return match ? match[1].padStart(8, '0') : String(id);
