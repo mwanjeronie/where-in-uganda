@@ -6,66 +6,123 @@ import DetailView from './components/DetailView';
 import Credits from './components/Credits';
 import { useGeolocation } from './hooks/useGeolocation';
 import { search, loadIndex, getIndex, type LocationEntry, type LocationType } from './utils/search';
+import { assignSubCountySlugs, districtTitle, slugify, subCountyTitle, type AssignedSubCountySlug } from './utils/placeSlugs.ts';
 
 type FilterOption = LocationType | 'all';
 type View =
   | { kind: 'search' }
   | { kind: 'districts' }
   | { kind: 'detail'; entry: LocationEntry; history: LocationEntry[] };
+type Route =
+  | { kind: 'search' }
+  | { kind: 'districts' }
+  | { kind: 'district'; slug: string }
+  | { kind: 'subcounty'; districtSlug: string; subSlug: string };
+type HistoryState = { district?: string; subcounty?: string } | null;
 
 const HOME_TITLE = 'Where in Uganda? — Find Your Village, Parish & Sub-county for Documents';
-
-/** Keep in sync with districtSlug() in scripts/prerender.mjs */
-function districtSlug(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-}
-
-function districtTitle(name: string): string {
-  return `${name} District, Uganda: counties, sub-counties and parishes | Where in Uganda?`;
-}
 
 function normalizePath(pathname: string): string {
   return pathname.replace(/\/+$/, '') || '/';
 }
 
-function districtSlugFromPath(pathname: string): string | null {
-  const match = normalizePath(pathname).match(/^\/district\/([a-z0-9-]+)$/);
-  return match ? match[1] : null;
+function readRoute(pathname: string): Route {
+  const path = normalizePath(pathname);
+  if (path === '/districts') return { kind: 'districts' };
+  const match = path.match(/^\/district\/([a-z0-9-]+)(?:\/([a-z0-9-]+))?$/);
+  if (!match) return { kind: 'search' };
+  if (match[2]) return { kind: 'subcounty', districtSlug: match[1], subSlug: match[2] };
+  return { kind: 'district', slug: match[1] };
 }
 
-function routeKind(pathname: string): 'search' | 'districts' | 'district' {
-  const path = normalizePath(pathname);
-  if (path === '/districts') return 'districts';
-  if (districtSlugFromPath(path)) return 'district';
-  return 'search';
+function subCountyRecords(index: LocationEntry[]) {
+  return index
+    .filter((entry) => entry.type === 'sub_county')
+    .map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      countyName: entry.breadcrumb[1] ?? '',
+      districtName: entry.breadcrumb[0] || entry.districtName,
+    }));
+}
+
+let subCountySlugCache: { index: LocationEntry[]; slugs: Map<string, AssignedSubCountySlug> } | null = null;
+
+function subCountySlugs(index: LocationEntry[]) {
+  if (subCountySlugCache?.index === index) return subCountySlugCache.slugs;
+  const slugs = assignSubCountySlugs(subCountyRecords(index));
+  subCountySlugCache = { index, slugs };
+  return slugs;
 }
 
 function findDistrict(index: LocationEntry[], slug: string): LocationEntry | undefined {
-  return index.find((entry) => entry.type === 'district' && districtSlug(entry.name) === slug);
+  return index.find((entry) => entry.type === 'district' && slugify(entry.name) === slug);
+}
+
+function findSubCounty(index: LocationEntry[], districtSlug: string, subSlug: string): LocationEntry | undefined {
+  const slugs = subCountySlugs(index);
+  return index.find((entry) => {
+    if (entry.type !== 'sub_county') return false;
+    const assigned = slugs.get(entry.id);
+    return assigned?.districtSlug === districtSlug && assigned.subSlug === subSlug;
+  });
+}
+
+function pathForEntry(entry: LocationEntry, index: LocationEntry[]): string | null {
+  if (entry.type === 'district') return `/district/${slugify(entry.name)}`;
+  if (entry.type !== 'sub_county') return null;
+  const assigned = subCountySlugs(index).get(entry.id);
+  return assigned ? `/district/${assigned.districtSlug}/${assigned.subSlug}` : null;
+}
+
+function historyStateFor(url: string): HistoryState {
+  const route = readRoute(url);
+  if (route.kind === 'district') return { district: route.slug };
+  if (route.kind === 'subcounty') return { district: route.districtSlug, subcounty: route.subSlug };
+  return null;
+}
+
+function pushedStateMatches(pathname: string): boolean {
+  const route = readRoute(pathname);
+  const state = window.history.state as HistoryState;
+  if (!state) return false;
+  if (route.kind === 'district') return state.district === route.slug && !state.subcounty;
+  if (route.kind === 'subcounty') return state.district === route.districtSlug && state.subcounty === route.subSlug;
+  return false;
 }
 
 function syncDocumentTitle(index: LocationEntry[] | null) {
-  const path = normalizePath(window.location.pathname);
-  if (path === '/districts') {
+  const route = readRoute(window.location.pathname);
+  if (route.kind === 'districts') {
     document.title = 'Districts in Uganda | Where in Uganda?';
     return;
   }
-  const slug = districtSlugFromPath(path);
-  if (slug) {
-    const entry = index ? findDistrict(index, slug) : undefined;
+  if (route.kind === 'district') {
+    const entry = index ? findDistrict(index, route.slug) : undefined;
     if (entry) document.title = districtTitle(entry.name);
+    return;
+  }
+  if (route.kind === 'subcounty') {
+    const entry = index ? findSubCounty(index, route.districtSlug, route.subSlug) : undefined;
+    if (entry) document.title = subCountyTitle(entry.name, entry.breadcrumb[1] ?? '', entry.districtName);
     return;
   }
   document.title = HOME_TITLE;
 }
 
 function viewForPath(index: LocationEntry[] | null): View {
-  const path = normalizePath(window.location.pathname);
-  if (path === '/districts') return { kind: 'districts' };
-  const slug = districtSlugFromPath(path);
-  if (!slug || !index) return { kind: 'search' };
-  const entry = findDistrict(index, slug);
-  return entry ? { kind: 'detail', entry, history: [] } : { kind: 'search' };
+  const route = readRoute(window.location.pathname);
+  if (route.kind === 'districts') return { kind: 'districts' };
+  if (!index) return { kind: 'search' };
+  if (route.kind === 'district') {
+    const entry = findDistrict(index, route.slug);
+    return entry ? { kind: 'detail', entry, history: [] } : { kind: 'search' };
+  }
+  if (route.kind === 'subcounty') {
+    const entry = findSubCounty(index, route.districtSlug, route.subSlug);
+    return entry ? { kind: 'detail', entry, history: [] } : { kind: 'search' };
+  }
+  return { kind: 'search' };
 }
 
 export default function App() {
@@ -73,7 +130,7 @@ export default function App() {
   const [filter, setFilter] = useState<FilterOption>('all');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [view, setView] = useState<View>(() =>
-    routeKind(window.location.pathname) === 'districts' ? { kind: 'districts' } : { kind: 'search' }
+    readRoute(window.location.pathname).kind === 'districts' ? { kind: 'districts' } : { kind: 'search' }
   );
   const [indexLoaded, setIndexLoaded] = useState(false);
   const [indexError, setIndexError] = useState('');
@@ -127,46 +184,61 @@ export default function App() {
       }
       return { kind: 'detail', entry, history: [] };
     });
-    if (entry.type === 'district') {
-      const url = `/district/${districtSlug(entry.name)}`;
-      if (normalizePath(window.location.pathname) !== url) {
-        window.history.pushState({ district: districtSlug(entry.name) }, '', url);
+    const index = getIndex();
+    if (index && (entry.type === 'district' || entry.type === 'sub_county')) {
+      const url = pathForEntry(entry, index);
+      if (url && normalizePath(window.location.pathname) !== url) {
+        window.history.pushState(historyStateFor(url), '', url);
       }
-      document.title = districtTitle(entry.name);
+      document.title = entry.type === 'district'
+        ? districtTitle(entry.name)
+        : subCountyTitle(entry.name, entry.breadcrumb[1] ?? '', entry.districtName);
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function goBack() {
-    if (view.kind === 'detail' && view.history.length === 0) {
-      const slug = districtSlugFromPath(window.location.pathname);
-      const state = window.history.state as { district?: string } | null;
-      if (slug && state?.district === slug) {
+    if (view.kind !== 'detail') return;
+    const index = getIndex();
+
+    if (view.history.length > 0) {
+      const parent = view.history[view.history.length - 1];
+      const parentUrl = index ? pathForEntry(parent, index) : null;
+      const current = normalizePath(window.location.pathname);
+      if (parentUrl && parentUrl !== current && pushedStateMatches(window.location.pathname)) {
         window.history.back();
         return;
       }
-      if (slug) window.history.replaceState(null, '', '/');
-      setView({ kind: 'search' });
-      syncDocumentTitle(getIndex());
+      if (parentUrl && parentUrl !== current) {
+        window.history.replaceState(historyStateFor(parentUrl), '', parentUrl);
+      } else if (!parentUrl && pushedStateMatches(window.location.pathname) && index) {
+        const ancestor = [...view.history].reverse().find((entry) => pathForEntry(entry, index));
+        const ancestorUrl = ancestor ? pathForEntry(ancestor, index) : null;
+        if (ancestorUrl && ancestorUrl !== current) {
+          window.history.replaceState(historyStateFor(ancestorUrl), '', ancestorUrl);
+        }
+      }
+      setView({ kind: 'detail', entry: parent, history: view.history.slice(0, -1) });
+      syncDocumentTitle(index);
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
-    setView((prev) => {
-      if (prev.kind !== 'detail') return prev;
-      if (prev.history.length > 0) {
-        const history = [...prev.history];
-        const entry = history.pop()!;
-        return { kind: 'detail', entry, history };
-      }
-      return { kind: 'search' };
-    });
+    if (pushedStateMatches(window.location.pathname)) {
+      window.history.back();
+      return;
+    }
+    if (readRoute(window.location.pathname).kind !== 'search') {
+      window.history.replaceState(null, '', '/');
+    }
+    setView({ kind: 'search' });
+    syncDocumentTitle(index);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  const route = routeKind(window.location.pathname);
-  const waitingForDistrict = route === 'district' && !indexLoaded && !indexError && view.kind !== 'detail';
-  const showSearch = view.kind === 'search' && !waitingForDistrict;
+  const route = readRoute(window.location.pathname);
+  const waitingForPlace = (route.kind === 'district' || route.kind === 'subcounty') && !indexLoaded && !indexError && view.kind !== 'detail';
+  const showSearch = view.kind === 'search' && !waitingForPlace;
   const showNearYou = geoState === 'done' && geoResult && !debouncedQuery.trim();
 
   return (
@@ -244,7 +316,7 @@ export default function App() {
                 <ul style={{ columns: 2, paddingLeft: '1.2em', margin: 0 }}>
                   {directory.map((entry) => (
                     <li key={entry.id} style={{ margin: '4px 0' }}>
-                      <a href={`/district/${districtSlug(entry.name)}`} style={{ color: '#FCDC04', textDecoration: 'none' }}>
+                      <a href={`/district/${slugify(entry.name)}`} style={{ color: '#FCDC04', textDecoration: 'none' }}>
                         {entry.name} District
                       </a>
                     </li>
@@ -255,7 +327,7 @@ export default function App() {
           </div>
         )}
 
-        {waitingForDistrict && (
+        {waitingForPlace && (
           <p style={{ paddingTop: '48px', textAlign: 'center', color: 'rgba(240,234,214,0.45)' }}>
             Loading district…
           </p>

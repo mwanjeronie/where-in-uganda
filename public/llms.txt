@@ -1,0 +1,14 @@
+# Where in Uganda?
+
+> Free search for a village, parish, sub-county, county and district in Uganda.
+
+Where in Uganda? helps people fill in the place names asked for on NIN and NIRA registration, KCCA documents, and school forms. Search a name you know, or start from the district directory and open a district, then a sub-county, to read the parishes and villages listed there.
+
+## Browse
+
+- [Home](https://uganda.winjo.xyz/): search every place in the directory
+- [Districts](https://uganda.winjo.xyz/districts): all districts, each linking to its counties and sub-counties
+- District: https://uganda.winjo.xyz/district/<district-slug>
+- Sub-county: https://uganda.winjo.xyz/district/<district-slug>/<sub-county-slug> lists that sub-county's parishes, with the villages in each parish written on the same page
+
+Slugs are lowercase and hyphenated. When the same sub-county name occurs more than once in a district, the county name is included in the sub-county slug so each page has its own URL.

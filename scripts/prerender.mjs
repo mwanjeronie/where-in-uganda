@@ -1,15 +1,11 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { assignSubCountySlugs, districtTitle, slugify, subCountyTitle } from '../src/utils/placeSlugs.ts';
 
 const ORIGIN = 'https://uganda.winjo.xyz';
 const root = join(import.meta.dirname, '..');
 const dist = join(root, 'dist');
 const templatePath = join(dist, 'index.html');
-
-/** Keep in sync with districtSlug() in src/App.tsx */
-function districtSlug(name) {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-}
 
 function escapeHtml(value) {
   return String(value)
@@ -22,10 +18,6 @@ function escapeHtml(value) {
 function countPhrase(count, singular, plural) {
   const label = count === 1 ? singular : plural;
   return `${count.toLocaleString('en-US')} ${label}`;
-}
-
-function districtTitle(name) {
-  return `${name} District, Uganda: counties, sub-counties and parishes | Where in Uganda?`;
 }
 
 function districtDescription(district) {
@@ -51,12 +43,15 @@ function breadcrumbList(items) {
   return {
     '@context': 'https://schema.org',
     '@type': 'BreadcrumbList',
-    itemListElement: items.map((item, index) => ({
-      '@type': 'ListItem',
-      position: index + 1,
-      name: item.name,
-      item: item.url,
-    })),
+    itemListElement: items.map((item, index) => {
+      const entry = {
+        '@type': 'ListItem',
+        position: index + 1,
+        name: item.name,
+      };
+      if (item.url) entry.item = item.url;
+      return entry;
+    }),
   };
 }
 
@@ -123,6 +118,8 @@ function applyHead(html, { title, description, url, jsonLd }) {
       .district-static { max-width: 720px; margin: 0 auto; padding: 32px 16px 72px; font-family: "DM Sans", sans-serif; line-height: 1.55; }
       .district-static h1 { font-family: Syne, sans-serif; font-size: clamp(32px, 6vw, 48px); line-height: 1.1; margin: 12px 0 16px; }
       .district-static h2 { font-family: Syne, sans-serif; font-size: 22px; margin: 28px 0 8px; }
+      .district-static h3 { font-size: 16px; margin: 18px 0 4px; }
+      .district-static .villages { color: rgba(240, 234, 214, 0.78); margin: 0 0 8px; }
       .district-static a { color: #FCDC04; }
       .district-static li { margin: 4px 0; }
       .district-index { columns: 2; padding-left: 1.2em; }
@@ -150,7 +147,7 @@ function list(items) {
 function districtBody(district) {
   const countyItems = district.counties.map((county) => escapeHtml(county.name));
   const subItems = district.subCounties.map(
-    (sub) => `${escapeHtml(sub.name)} (${escapeHtml(sub.countyName)})`,
+    (sub) => `<a href="/district/${district.slug}/${sub.slug}">${escapeHtml(sub.name)}</a> (${escapeHtml(sub.countyName)})`,
   );
   return `      <main class="district-static">
         <p><a href="/">Where in Uganda?</a> · <a href="/districts">Districts</a></p>
@@ -160,6 +157,35 @@ function districtBody(district) {
 ${list(countyItems)}
         <h2>Sub-counties</h2>
 ${list(subItems)}
+      </main>`;
+}
+
+function subCountyDescription(sub, districtName) {
+  return `${sub.name} Sub-county in ${sub.countyName}, ${districtName} District has ${countPhrase(sub.parishes.length, 'parish', 'parishes')} and ${countPhrase(sub.villageCount, 'village', 'villages')}.`;
+}
+
+function subCountyHeading(sub, districtName) {
+  return `${sub.name} Sub-county, ${sub.countyName}, ${districtName} District`;
+}
+
+function subCountyBody(sub, district) {
+  const parishBlocks = sub.parishes.length === 0
+    ? '        <p>No parishes are listed for this sub-county.</p>'
+    : sub.parishes.map((parish) => {
+      const villages = parish.villages.length === 0
+        ? 'No villages are listed for this parish.'
+        : parish.villages.map((name) => escapeHtml(name)).join(', ');
+      return `        <section>
+          <h3>${escapeHtml(parish.name)}</h3>
+          <p class="villages">${villages}</p>
+        </section>`;
+    }).join('\n');
+  return `      <main class="district-static">
+        <p><a href="/">Uganda</a> · <a href="/district/${district.slug}">${escapeHtml(district.name)} District</a> · ${escapeHtml(sub.countyName)} · ${escapeHtml(sub.name)}</p>
+        <h1>${escapeHtml(subCountyHeading(sub, district.name))}</h1>
+        <p>${escapeHtml(subCountyDescription(sub, district.name))}</p>
+        <h2>Parishes and villages</h2>
+${parishBlocks}
       </main>`;
 }
 
@@ -224,15 +250,33 @@ const sourceVillages = loadJson('villages.json');
 const countiesByDistrict = groupBy(sourceCounties, 'district');
 const subsByCounty = groupBy(sourceSubs, 'county');
 const parishesBySub = groupBy(sourceParishes, 'subcounty');
-const villageCountByParish = new Map();
+const villagesByParish = new Map();
 for (const village of sourceVillages) {
   const id = String(village.parish);
-  villageCountByParish.set(id, (villageCountByParish.get(id) ?? 0) + 1);
+  const list = villagesByParish.get(id);
+  if (list) list.push(village.name);
+  else villagesByParish.set(id, [village.name]);
 }
+
+const districtNameById = new Map(sourceDistricts.map((district) => [String(district.id), district.name]));
+const countyById = new Map(sourceCounties.map((county) => [String(county.id), county]));
+const slugRecords = sourceSubs.map((sub) => {
+  const county = countyById.get(String(sub.county));
+  if (!county) throw new Error(`Sub-county ${sub.name} is missing its county`);
+  const districtName = districtNameById.get(String(county.district));
+  if (!districtName) throw new Error(`County ${county.name} is missing its district`);
+  return {
+    id: String(sub.id),
+    name: sub.name,
+    countyName: county.name,
+    districtName,
+  };
+});
+const subSlugById = assignSubCountySlugs(slugRecords);
 
 const seenSlugs = new Set();
 const districts = sourceDistricts.map((district) => {
-  const slug = districtSlug(district.name);
+  const slug = slugify(district.name);
   if (!slug) throw new Error(`Empty slug for district ${district.name}`);
   if (seenSlugs.has(slug)) throw new Error(`Duplicate district slug: ${slug}`);
   seenSlugs.add(slug);
@@ -246,21 +290,41 @@ const districts = sourceDistricts.map((district) => {
   for (const county of counties) {
     const subs = subsByCounty.get(String(county.id)) ?? [];
     for (const sub of subs) {
-      subCounties.push({ name: sub.name, countyName: county.name });
-      const parishes = parishesBySub.get(String(sub.id)) ?? [];
-      parishCount += parishes.length;
-      for (const parish of parishes) {
-        villageCount += villageCountByParish.get(String(parish.id)) ?? 0;
+      const assigned = subSlugById.get(String(sub.id));
+      if (!assigned || assigned.districtSlug !== slug) {
+        throw new Error(`Missing slug for ${sub.name} in ${district.name}`);
       }
+      const parishes = (parishesBySub.get(String(sub.id)) ?? [])
+        .map((parish) => ({
+          name: parish.name,
+          villages: (villagesByParish.get(String(parish.id)) ?? []).slice().sort((a, b) => a.localeCompare(b, 'en')),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'en'));
+      const subVillageCount = parishes.reduce((sum, parish) => sum + parish.villages.length, 0);
+      subCounties.push({
+        name: sub.name,
+        countyName: county.name,
+        slug: assigned.subSlug,
+        parishes,
+        villageCount: subVillageCount,
+      });
+      parishCount += parishes.length;
+      villageCount += subVillageCount;
     }
   }
-  subCounties.sort((a, b) => a.name.localeCompare(b.name, 'en') || a.countyName.localeCompare(b.countyName, 'en'));
+  subCounties.sort((a, b) => a.name.localeCompare(b.name, 'en') || a.countyName.localeCompare(b.countyName, 'en') || a.slug.localeCompare(b.slug, 'en'));
+  const subSlugs = new Set(subCounties.map((sub) => sub.slug));
+  if (subSlugs.size !== subCounties.length) {
+    throw new Error(`Duplicate sub-county slug in ${district.name}`);
+  }
   return { ...district, slug, counties, subCounties, parishCount, villageCount };
 });
 
 districts.sort((a, b) => a.name.localeCompare(b.name, 'en'));
 
 let addedBytes = 0;
+let subCountyBytes = 0;
+let subCountyPages = 0;
 for (const district of districts) {
   const url = `${ORIGIN}/district/${district.slug}`;
   const title = districtTitle(district.name);
@@ -290,6 +354,50 @@ for (const district of districts) {
   html = replaceRoot(html, districtBody(district));
   html = finishPage(html, `<h1>${escapeHtml(district.name)} District, Uganda</h1>`);
   addedBytes += writePage(join('district', district.slug, 'index.html'), html);
+
+  for (const sub of district.subCounties) {
+    const url = `${ORIGIN}/district/${district.slug}/${sub.slug}`;
+    const title = subCountyTitle(sub.name, sub.countyName, district.name);
+    const description = subCountyDescription(sub, district.name);
+    let subHtml = applyHead(template, {
+      title,
+      description,
+      url,
+      jsonLd: [
+        breadcrumbList([
+          { name: 'Uganda', url: `${ORIGIN}/` },
+          { name: `${district.name} District`, url: `${ORIGIN}/district/${district.slug}` },
+          { name: sub.countyName },
+          { name: `${sub.name} Sub-county`, url },
+        ]),
+        {
+          '@context': 'https://schema.org',
+          '@type': 'AdministrativeArea',
+          name: `${sub.name} Sub-county`,
+          url,
+          containedInPlace: {
+            '@type': 'AdministrativeArea',
+            name: sub.countyName,
+            containedInPlace: {
+              '@type': 'AdministrativeArea',
+              name: `${district.name} District`,
+              url: `${ORIGIN}/district/${district.slug}`,
+              containedInPlace: {
+                '@type': 'Country',
+                name: 'Uganda',
+              },
+            },
+          },
+        },
+      ],
+    });
+    subHtml = replaceRoot(subHtml, subCountyBody(sub, district));
+    subHtml = finishPage(subHtml, `<h1>${escapeHtml(subCountyHeading(sub, district.name))}</h1>`);
+    const bytes = writePage(join('district', district.slug, sub.slug, 'index.html'), subHtml);
+    addedBytes += bytes;
+    subCountyBytes += bytes;
+    subCountyPages += 1;
+  }
 }
 
 const indexTitle = 'Districts in Uganda | Where in Uganda?';
@@ -314,8 +422,13 @@ const previousSitemap = statSync(sitemapPath, { throwIfNoEntry: false })?.size ?
 const urls = [
   `${ORIGIN}/`,
   `${ORIGIN}/districts`,
-  ...districts.map((district) => `${ORIGIN}/district/${district.slug}`),
 ];
+for (const district of districts) {
+  urls.push(`${ORIGIN}/district/${district.slug}`);
+  for (const sub of district.subCounties) {
+    urls.push(`${ORIGIN}/district/${district.slug}/${sub.slug}`);
+  }
+}
 const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${urls.map((loc) => `  <url>\n    <loc>${loc}</loc>\n  </url>`).join('\n')}
@@ -326,6 +439,8 @@ addedBytes += Buffer.byteLength(sitemap) - previousSitemap;
 
 const summary = {
   districtPages: districts.length,
+  subCountyPages,
+  subCountyBytes,
   indexPages: 1,
   sitemapUrls: urls.length,
   addedBytes,
