@@ -373,7 +373,9 @@ const template = readFileSync(templatePath, 'utf8');
 if (!/<script type="module"/.test(template)) {
   throw new Error('dist/index.html is missing the app script. Run vite build first.');
 }
-const shell = compileTemplate(template).replace(/\s*<script type="module"[\s\S]*?<\/script>/, '');
+const shell = compileTemplate(template)
+  .replace(/\s*<script type="module"[\s\S]*?<\/script>/, '')
+  .replace('<body class="home">', '<body>');
 
 const sourceDistricts = loadJson('districts.json');
 const sourceCounties = loadJson('counties.json');

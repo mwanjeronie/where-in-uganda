@@ -23,7 +23,7 @@ export default function SearchBar({ value, onChange, resultCount, totalIndexed, 
   const busy = geoState === 'requesting' || geoState === 'locating';
 
   return (
-    <div>
+    <div id="hero-search">
       <div style={{ position: 'relative' }}>
         {/* Search icon */}
         <div style={{
