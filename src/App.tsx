@@ -4,6 +4,7 @@ import FilterPills from './components/FilterPills';
 import ResultCard from './components/ResultCard';
 import DetailView from './components/DetailView';
 import Credits from './components/Credits';
+import { PlaceFrame, type Crumb, type FormField } from './components/PlaceFrame.tsx';
 import { useGeolocation } from './hooks/useGeolocation';
 import { search, loadIndex, getIndex, type LocationEntry, type LocationType } from './utils/search';
 import { assignGroupedSlugs, assignSubCountySlugs, districtTitle, parishTitle, slugify, subCountyTitle, type AssignedSubCountySlug } from './utils/placeSlugs.ts';
@@ -22,6 +23,40 @@ type Route =
 type HistoryState = { district?: string; subcounty?: string; parish?: string } | null;
 
 const HOME_TITLE = 'Where in Uganda? — Find Your Village, Parish & Sub-county for Documents';
+const FORM_LABELS = ['Village', 'Parish', 'Sub-county', 'County', 'District'] as const;
+
+function queryFromLocation(): string {
+  return new URLSearchParams(window.location.search).get('q') ?? '';
+}
+
+function formFields(entry: LocationEntry): FormField[] {
+  const trail = entry.breadcrumb;
+  const district = entry.type === 'district' ? entry.name : (entry.districtName || trail[0] || '');
+  const county = entry.type === 'county' ? entry.name : (entry.type === 'district' ? '' : (trail[1] ?? ''));
+  const subCounty = entry.type === 'sub_county'
+    ? entry.name
+    : (entry.type === 'parish' || entry.type === 'village' ? (trail[2] ?? '') : '');
+  const parish = entry.type === 'parish' ? entry.name : (entry.type === 'village' ? (trail[3] ?? '') : '');
+  const village = entry.type === 'village' ? entry.name : '';
+  return FORM_LABELS.map((label, index) => ({
+    label,
+    value: [village, parish, subCounty, county, district][index] ?? '',
+  }));
+}
+
+function formHint(entry: LocationEntry): string {
+  const known = formFields(entry).filter((field) => field.value);
+  const named = known.map((field) => `${field.value} as the ${field.label.toLowerCase()}`).join(', ');
+  if (entry.type === 'parish') {
+    return `On a NIN, NIRA, or school form, pick a village from the list, then use ${named}.`;
+  }
+  if (entry.type === 'village') {
+    return `On a NIN, NIRA, or school form, use ${named}.`;
+  }
+  return known.length
+    ? `On a NIN, NIRA, or school form, use ${named}. Open a place below to fill in the rest.`
+    : 'On a NIN, NIRA, or school form, open a place below and copy the village, parish, sub-county, county and district.';
+}
 
 function normalizePath(pathname: string): string {
   return pathname.replace(/\/+$/, '') || '/';
@@ -193,10 +228,56 @@ function viewForPath(index: LocationEntry[] | null): View {
   return { kind: 'search' };
 }
 
+function crumbsFor(entry: LocationEntry, index: LocationEntry[]): Crumb[] {
+  const crumbs: Crumb[] = [{ name: 'Uganda', href: '/' }];
+  const districtName = entry.type === 'district' ? entry.name : (entry.districtName || entry.breadcrumb[0] || '');
+  if (districtName) {
+    crumbs.push(entry.type === 'district'
+      ? { name: 'Districts', href: '/districts' }
+      : { name: `${districtName} District`, href: `/district/${slugify(districtName)}` });
+  }
+  if (entry.type === 'district') {
+    crumbs.push({ name: `${entry.name} District` });
+    return crumbs;
+  }
+  const countyName = entry.type === 'county' ? entry.name : entry.breadcrumb[1];
+  if (countyName) crumbs.push({ name: countyName });
+  if (entry.type === 'county') return crumbs;
+
+  const subName = entry.type === 'sub_county' ? entry.name : entry.breadcrumb[2];
+  if (subName) {
+    const sub = index.find((item) =>
+      item.type === 'sub_county'
+      && item.name === subName
+      && (item.breadcrumb[0] || item.districtName) === districtName
+      && item.breadcrumb[1] === (entry.breadcrumb[1] ?? countyName),
+    );
+    const href = sub ? pathForEntry(sub, index) ?? undefined : undefined;
+    crumbs.push(entry.type === 'sub_county' || !href ? { name: subName } : { name: subName, href });
+  }
+  if (entry.type === 'sub_county') return crumbs;
+
+  const parishName = entry.type === 'parish' ? entry.name : entry.breadcrumb[3];
+  if (parishName) {
+    const parish = index.find((item) =>
+      item.type === 'parish'
+      && item.name === parishName
+      && (item.breadcrumb[0] || item.districtName) === districtName
+      && item.breadcrumb[1] === entry.breadcrumb[1]
+      && item.breadcrumb[2] === entry.breadcrumb[2],
+    );
+    const href = parish ? pathForEntry(parish, index) ?? undefined : undefined;
+    crumbs.push(entry.type === 'parish' || !href ? { name: parishName } : { name: parishName, href });
+  }
+  if (entry.type === 'parish') return crumbs;
+  crumbs.push({ name: entry.name });
+  return crumbs;
+}
+
 export default function App() {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(queryFromLocation);
   const [filter, setFilter] = useState<FilterOption>('all');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState(queryFromLocation);
   const [view, setView] = useState<View>(() =>
     readRoute(window.location.pathname).kind === 'districts' ? { kind: 'districts' } : { kind: 'search' }
   );
@@ -227,9 +308,32 @@ export default function App() {
       const index = getIndex();
       setView(viewForPath(index));
       syncDocumentTitle(index);
+      setQuery(queryFromLocation());
     }
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    const input = document.querySelector<HTMLInputElement>('#site-search');
+    if (input && input.value !== query) input.value = query;
+  }, [query]);
+
+  useEffect(() => {
+    const form = document.querySelector<HTMLFormElement>('#site-find');
+    if (!form) return;
+    function onSubmit(event: SubmitEvent) {
+      if (normalizePath(window.location.pathname) !== '/') return;
+      event.preventDefault();
+      const value = new FormData(form!).get('q');
+      const text = typeof value === 'string' ? value : '';
+      setQuery(text);
+      setView({ kind: 'search' });
+      const next = text ? `/?q=${encodeURIComponent(text)}` : '/';
+      window.history.replaceState(null, '', next);
+    }
+    form.addEventListener('submit', onSubmit);
+    return () => form.removeEventListener('submit', onSubmit);
   }, []);
 
   useEffect(() => {
@@ -313,17 +417,10 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh' }}>
-      {/* Uganda flag strip */}
-      <div style={{ display: 'flex', height: '5px', width: '100%' }}>
-        {['#1a1a1a', '#FCDC04', '#C8101A', '#1a1a1a', '#FCDC04', '#C8101A'].map((c, i) => (
-          <div key={i} style={{ flex: 1, background: c }} />
-        ))}
-      </div>
-
-      <div style={{ maxWidth: '720px', margin: '0 auto', padding: '0 16px' }}>
+      <div id="content" style={{ maxWidth: '720px', margin: '0 auto', padding: '0 16px' }}>
         {/* Header */}
         {showSearch && (
-          <div style={{ textAlign: 'center', paddingTop: '52px', marginBottom: '40px' }}>
+          <div style={{ textAlign: 'center', paddingTop: '20px', marginBottom: '24px' }}>
             <div style={{
               display: 'inline-flex', alignItems: 'center', gap: '8px',
               padding: '6px 16px', borderRadius: '999px', marginBottom: '20px',
@@ -337,9 +434,9 @@ export default function App() {
 
             <h1 style={{
               fontFamily: "'Syne', sans-serif",
-              fontSize: 'clamp(40px, 8vw, 64px)',
-              fontWeight: 800, lineHeight: 1, letterSpacing: '-2px',
-              color: '#F0EAD6', margin: '0 0 16px',
+              fontSize: 'clamp(36px, 10vw, 60px)',
+              fontWeight: 800, lineHeight: 1.05, letterSpacing: '-1.5px',
+              color: '#F0EAD6', margin: '0 0 12px',
             }}>
               Where in{' '}
               <span style={{
@@ -358,40 +455,52 @@ export default function App() {
 
         {/* Detail view */}
         {view.kind === 'detail' && (
-          <div style={{ paddingTop: '32px' }}>
+          <PlaceFrame
+            crumbs={crumbsFor(view.entry, getIndex() ?? [])}
+            fields={formFields(view.entry)}
+            hint={formHint(view.entry)}
+          >
             <DetailView entry={view.entry} onBack={goBack} onSelect={openDetail} />
-          </div>
+          </PlaceFrame>
         )}
 
         {view.kind === 'districts' && (
-          <div style={{ paddingTop: '32px', paddingBottom: '72px' }}>
-            <a href="/" style={{ color: '#FCDC04', fontSize: '14px', textDecoration: 'none' }}>← Where in Uganda?</a>
-            <h1 style={{
-              fontFamily: "'Syne', sans-serif",
-              fontSize: 'clamp(32px, 6vw, 48px)',
-              lineHeight: 1.1,
-              margin: '16px 0',
-              color: '#F0EAD6',
-            }}>
-              Districts in Uganda
-            </h1>
-            {!indexLoaded && !indexError && (
-              <p style={{ color: 'rgba(240,234,214,0.45)' }}>Loading districts…</p>
-            )}
+          <div className="place place-in-app">
+            <nav className="crumbs" aria-label="Breadcrumb">
+              <a href="/">Uganda</a>
+              <span aria-hidden="true">/</span>
+              <span aria-current="page">Districts</span>
+            </nav>
+            <h1>Districts in Uganda</h1>
+            {!indexLoaded && !indexError && <p className="lede">Loading districts…</p>}
             {indexLoaded && (
               <>
-                <p style={{ color: 'rgba(240,234,214,0.55)', marginTop: 0 }}>
-                  {directory.length.toLocaleString()} districts. Open one for its counties and sub-counties.
-                </p>
-                <ul style={{ columns: 2, paddingLeft: '1.2em', margin: 0 }}>
-                  {directory.map((entry) => (
-                    <li key={entry.id} style={{ margin: '4px 0' }}>
-                      <a href={`/district/${slugify(entry.name)}`} style={{ color: '#FCDC04', textDecoration: 'none' }}>
-                        {entry.name} District
-                      </a>
-                    </li>
+                <p className="lede">{directory.length.toLocaleString()} districts. Open one for its counties and sub-counties.</p>
+                <nav className="az" aria-label="Jump to a letter">
+                  {'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((letter) => (
+                    directory.some((entry) => entry.name.toUpperCase().startsWith(letter))
+                      ? <a key={letter} href={`#app-letter-${letter}`}>{letter}</a>
+                      : <span key={letter}>{letter}</span>
                   ))}
-                </ul>
+                </nav>
+                {'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((letter) => {
+                  const group = directory.filter((entry) => entry.name.toUpperCase().startsWith(letter));
+                  if (group.length === 0) return null;
+                  return (
+                    <section key={letter} id={`app-letter-${letter}`}>
+                      <h2>{letter}</h2>
+                      <ul className="cards">
+                        {group.map((entry) => (
+                          <li key={entry.id}>
+                            <a href={`/district/${slugify(entry.name)}`}>
+                              <span className="card-title">{entry.name} District</span>
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  );
+                })}
               </>
             )}
           </div>

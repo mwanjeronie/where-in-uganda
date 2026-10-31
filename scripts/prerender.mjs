@@ -61,18 +61,6 @@ function breadcrumbList(items) {
   };
 }
 
-const PAGE_STYLE = `    <style>
-      .district-static { max-width: 720px; margin: 0 auto; padding: 32px 16px 72px; font-family: "DM Sans", sans-serif; line-height: 1.55; }
-      .district-static h1 { font-family: Syne, sans-serif; font-size: clamp(32px, 6vw, 48px); line-height: 1.1; margin: 12px 0 16px; }
-      .district-static h2 { font-family: Syne, sans-serif; font-size: 22px; margin: 28px 0 8px; }
-      .district-static h3 { font-size: 16px; margin: 18px 0 4px; }
-      .district-static .villages { color: rgba(240, 234, 214, 0.78); margin: 0 0 8px; }
-      .district-static a { color: #FCDC04; }
-      .district-static li { margin: 4px 0; }
-      .district-index { columns: 2; padding-left: 1.2em; }
-      @media (max-width: 600px) { .district-index { columns: 1; } }
-    </style>`;
-
 const TOKEN = {
   title: '\u0000TITLE\u0000',
   description: '\u0000DESCRIPTION\u0000',
@@ -138,7 +126,7 @@ function compileTemplate(template) {
     throw new Error('Could not remove the homepage JSON-LD from the district template');
   }
   html = withoutLd;
-  html = replaceOnce(html, /<\/head>/, `${TOKEN.jsonld}\n${PAGE_STYLE}\n  </head>`, 'head close');
+  html = replaceOnce(html, /<\/head>/, `${TOKEN.jsonld}\n  </head>`, 'head close');
 
   const open = '<div id="root">';
   const start = html.indexOf(open);
@@ -162,24 +150,75 @@ function renderPage(shell, { title, description, url, jsonLd, body }) {
     .replaceAll(TOKEN.root, body);
 }
 
-function list(items) {
-  if (items.length === 0) return '        <p>None are listed for this district.</p>';
-  return `        <ul>\n${items.map((item) => `          <li>${item}</li>`).join('\n')}\n        </ul>`;
+function crumbs(items) {
+  const parts = items.map((item, index) => {
+    const sep = index === 0 ? '' : '<span aria-hidden="true">/</span>';
+    const node = item.href
+      ? `<a href="${item.href}">${escapeHtml(item.name)}</a>`
+      : `<span${index === items.length - 1 ? ' aria-current="page"' : ''}>${escapeHtml(item.name)}</span>`;
+    return `${sep}${node}`;
+  }).join('');
+  return `<nav class="crumbs" aria-label="Breadcrumb">${parts}</nav>`;
 }
 
-function districtBody(district) {
-  const countyItems = district.counties.map((county) => escapeHtml(county.name));
-  const subItems = district.subCounties.map(
-    (sub) => `<a href="/district/${district.slug}/${sub.slug}">${escapeHtml(sub.name)}</a> (${escapeHtml(sub.countyName)})`,
-  );
-  return `      <main class="district-static">
-        <p><a href="/">Where in Uganda?</a> · <a href="/districts">Districts</a></p>
+function copyForm(fields, hint) {
+  const rows = fields.map((field) => `            <div><dt>${escapeHtml(field.label)}</dt><dd>${escapeHtml(field.value || '—')}</dd></div>`).join('\n');
+  return `        <section class="copy-form">
+          <h2>Copy for your form</h2>
+          <p class="hint">${escapeHtml(hint)}</p>
+          <dl>
+${rows}
+          </dl>
+          <button type="button" data-copy-form>Copy for your form</button>
+        </section>`;
+}
+
+function cards(items) {
+  if (items.length === 0) return '        <p class="empty">None are listed.</p>';
+  return `        <ul class="cards">
+${items.map((item) => `          <li><a href="${item.href}"><span class="card-title">${escapeHtml(item.title)}</span><span class="count">${escapeHtml(item.meta)}</span></a></li>`).join('\n')}
+        </ul>`;
+}
+
+function chips(links) {
+  if (links.length === 0) return '';
+  return `<div class="chips">${links.map((link) => `<a href="${link.href}">${escapeHtml(link.name)}</a>`).join('')}</div>`;
+}
+
+function districtBody(district, neighbors) {
+  const countyBlocks = district.counties.map((county) => {
+    const subs = district.subCounties.filter((sub) => sub.countyName === county.name);
+    return `        <section>
+          <h2>${escapeHtml(county.name)}</h2>
+          <p class="section-meta">${escapeHtml(countPhrase(subs.length, 'sub-county', 'sub-counties'))}</p>
+${cards(subs.map((sub) => ({
+    href: `/district/${district.slug}/${sub.slug}`,
+    title: sub.name,
+    meta: `${countPhrase(sub.parishes.length, 'parish', 'parishes')} · ${countPhrase(sub.villageCount, 'village', 'villages')}`,
+  })))}
+        </section>`;
+  }).join('\n');
+  const nearby = chips(neighbors.map((item) => ({
+    href: `/district/${item.slug}`,
+    name: `${item.name} District`,
+  })));
+  return `      <main id="content" class="place">
+        ${crumbs([
+          { name: 'Uganda', href: '/' },
+          { name: 'Districts', href: '/districts' },
+          { name: `${district.name} District` },
+        ])}
         <h1>${escapeHtml(district.name)} District, Uganda</h1>
-        <p>${escapeHtml(districtDescription(district))}</p>
-        <h2>Counties</h2>
-${list(countyItems)}
-        <h2>Sub-counties</h2>
-${list(subItems)}
+        <p class="lede">${escapeHtml(districtDescription(district))}</p>
+        ${copyForm([
+          { label: 'Village', value: '' },
+          { label: 'Parish', value: '' },
+          { label: 'Sub-county', value: '' },
+          { label: 'County', value: '' },
+          { label: 'District', value: district.name },
+        ], `On a NIN, NIRA, or school form, this district is ${district.name}. Open a sub-county, then a parish, to fill in the village, parish, sub-county and county.`)}
+${countyBlocks}
+        ${nearby ? `<nav class="nearby" aria-label="Nearby districts"><h2>Nearby districts</h2>${nearby}</nav>` : ''}
       </main>`;
 }
 
@@ -191,24 +230,35 @@ function subCountyHeading(sub, districtName) {
   return `${sub.name} Sub-county, ${sub.countyName}, ${districtName} District`;
 }
 
-function subCountyBody(sub, district) {
-  const parishBlocks = sub.parishes.length === 0
-    ? '        <p>No parishes are listed for this sub-county.</p>'
-    : sub.parishes.map((parish) => {
-      const villages = parish.villages.length === 0
-        ? 'No villages are listed for this parish.'
-        : parish.villages.map((name) => escapeHtml(name)).join(', ');
-      return `        <section>
-          <h3><a href="/district/${district.slug}/${sub.slug}/${parish.slug}">${escapeHtml(parish.name)}</a></h3>
-          <p class="villages">${villages}</p>
-        </section>`;
-    }).join('\n');
-  return `      <main class="district-static">
-        <p><a href="/">Uganda</a> · <a href="/district/${district.slug}">${escapeHtml(district.name)} District</a> · ${escapeHtml(sub.countyName)} · ${escapeHtml(sub.name)}</p>
+function subCountyBody(sub, district, siblings) {
+  const parishCards = cards(sub.parishes.map((parish) => ({
+    href: `/district/${district.slug}/${sub.slug}/${parish.slug}`,
+    title: parish.name,
+    meta: countPhrase(parish.villages.length, 'village', 'villages'),
+  })));
+  const nearby = chips(siblings.map((item) => ({
+    href: `/district/${district.slug}/${item.slug}`,
+    name: item.name,
+  })));
+  return `      <main id="content" class="place">
+        ${crumbs([
+          { name: 'Uganda', href: '/' },
+          { name: `${district.name} District`, href: `/district/${district.slug}` },
+          { name: sub.countyName },
+          { name: sub.name },
+        ])}
         <h1>${escapeHtml(subCountyHeading(sub, district.name))}</h1>
-        <p>${escapeHtml(subCountyDescription(sub, district.name))}</p>
-        <h2>Parishes and villages</h2>
-${parishBlocks}
+        <p class="lede">${escapeHtml(subCountyDescription(sub, district.name))}</p>
+        ${copyForm([
+          { label: 'Village', value: '' },
+          { label: 'Parish', value: '' },
+          { label: 'Sub-county', value: sub.name },
+          { label: 'County', value: sub.countyName },
+          { label: 'District', value: district.name },
+        ], `On a NIN, NIRA, or school form, this is the ${sub.name} sub-county in ${sub.countyName}, ${district.name} district. Open a parish to choose the parish and village.`)}
+        <h2>Parishes</h2>
+${parishCards}
+        ${nearby ? `<nav class="nearby" aria-label="Nearby sub-counties"><h2>Nearby in ${escapeHtml(sub.countyName)}</h2>${nearby}</nav>` : ''}
       </main>`;
 }
 
@@ -224,40 +274,74 @@ function parishFormLine(parish, sub, district) {
   return `For a NIN or NIRA registration, or a school form, use a village name from this list, with ${parish.name} as the parish, ${sub.name} as the sub-county, ${sub.countyName} as the county, and ${district.name} as the district.`;
 }
 
-function parishBody(parish, sub, district) {
+function parishBody(parish, sub, district, siblings) {
   const villages = parish.villages.length === 0
     ? 'No villages are listed for this parish.'
     : parish.villages.map((name) => escapeHtml(name)).join(', ');
-  return `      <main class="district-static">
-        <p><a href="/">Uganda</a> · <a href="/district/${district.slug}">${escapeHtml(district.name)} District</a> · ${escapeHtml(sub.countyName)} · <a href="/district/${district.slug}/${sub.slug}">${escapeHtml(sub.name)}</a> · ${escapeHtml(parish.name)}</p>
+  const nearby = chips(siblings.map((item) => ({
+    href: `/district/${district.slug}/${sub.slug}/${item.slug}`,
+    name: item.name,
+  })));
+  return `      <main id="content" class="place">
+        ${crumbs([
+          { name: 'Uganda', href: '/' },
+          { name: `${district.name} District`, href: `/district/${district.slug}` },
+          { name: sub.countyName },
+          { name: sub.name, href: `/district/${district.slug}/${sub.slug}` },
+          { name: parish.name },
+        ])}
         <h1>${escapeHtml(parishHeading(parish, sub, district))}</h1>
-        <p>${escapeHtml(parishDescription(parish, sub, district))}</p>
-        <p>${escapeHtml(parishFormLine(parish, sub, district))}</p>
+        <p class="lede">${escapeHtml(parishDescription(parish, sub, district))}</p>
+        ${copyForm([
+          { label: 'Village', value: '' },
+          { label: 'Parish', value: parish.name },
+          { label: 'Sub-county', value: sub.name },
+          { label: 'County', value: sub.countyName },
+          { label: 'District', value: district.name },
+        ], parishFormLine(parish, sub, district))}
         <h2>Villages</h2>
         <p class="villages">${villages}</p>
+        ${nearby ? `<nav class="nearby" aria-label="Nearby parishes"><h2>Nearby parishes</h2>${nearby}</nav>` : ''}
       </main>`;
 }
 
 function indexBody(districts) {
-  const items = districts
-    .map(
-      (district) =>
-        `          <li><a href="/district/${district.slug}">${escapeHtml(district.name)} District</a></li>`,
-    )
-    .join('\n');
-  return `      <main class="district-static">
-        <p><a href="/">Where in Uganda?</a></p>
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  const groups = new Map();
+  for (const district of districts) {
+    const letter = district.name.slice(0, 1).toUpperCase();
+    const list = groups.get(letter);
+    if (list) list.push(district);
+    else groups.set(letter, [district]);
+  }
+  const az = letters.map((letter) => (
+    groups.has(letter)
+      ? `<a href="#letter-${letter}">${letter}</a>`
+      : `<span>${letter}</span>`
+  )).join('');
+  const sections = [...groups.entries()].map(([letter, list]) => `        <section id="letter-${letter}">
+          <h2>${letter}</h2>
+${cards(list.map((district) => ({
+    href: `/district/${district.slug}`,
+    title: `${district.name} District`,
+    meta: `${countPhrase(district.counties.length, 'county', 'counties')} · ${countPhrase(district.subCounties.length, 'sub-county', 'sub-counties')}`,
+  })))}
+        </section>`).join('\n');
+  return `      <main id="content" class="place">
+        ${crumbs([{ name: 'Uganda', href: '/' }, { name: 'Districts' }])}
         <h1>Districts in Uganda</h1>
-        <p>This directory lists ${districts.length.toLocaleString('en-US')} districts. Open a district to see its counties and sub-counties.</p>
-        <ul class="district-index">
-${items}
-        </ul>
+        <p class="lede">This directory lists ${districts.length.toLocaleString('en-US')} districts. Open a district to see its counties and sub-counties.</p>
+        <nav class="az" aria-label="Jump to a letter">${az}</nav>
+${sections}
       </main>`;
 }
 
 function finishPage(html, expectedH1) {
-  if (!/<script type="module"/.test(html)) {
-    throw new Error(`App script missing from page ${expectedH1}`);
+  if (!html.includes('rel="stylesheet" href="/place.css"')) {
+    throw new Error(`Stylesheet missing from page ${expectedH1}`);
+  }
+  if (html.includes('<script type="module"')) {
+    throw new Error(`Place page still loads the app bundle: ${expectedH1}`);
   }
   if (!html.includes(expectedH1)) throw new Error(`H1 missing from page ${expectedH1}`);
   return html;
@@ -289,7 +373,7 @@ const template = readFileSync(templatePath, 'utf8');
 if (!/<script type="module"/.test(template)) {
   throw new Error('dist/index.html is missing the app script. Run vite build first.');
 }
-const shell = compileTemplate(template);
+const shell = compileTemplate(template).replace(/\s*<script type="module"[\s\S]*?<\/script>/, '');
 
 const sourceDistricts = loadJson('districts.json');
 const sourceCounties = loadJson('counties.json');
@@ -397,7 +481,8 @@ let parishBytes = 0;
 let parishPages = 0;
 const subCountyUrls = [];
 const parishUrls = [];
-for (const district of districts) {
+for (const [districtIndex, district] of districts.entries()) {
+  const neighbors = districts.filter((_, index) => index !== districtIndex && Math.abs(index - districtIndex) <= 3);
   const url = `${ORIGIN}/district/${district.slug}`;
   const title = districtTitle(district.name);
   const description = districtDescription(district);
@@ -422,7 +507,7 @@ for (const district of districts) {
         },
       },
     ]),
-    body: districtBody(district),
+    body: districtBody(district, neighbors),
   });
   finishPage(html, `<h1>${escapeHtml(district.name)} District, Uganda</h1>`);
   addedBytes += writePage(join('district', district.slug, 'index.html'), html);
@@ -462,7 +547,7 @@ for (const district of districts) {
           },
         },
       ]),
-      body: subCountyBody(sub, district),
+      body: subCountyBody(sub, district, district.subCounties.filter((other) => other.countyName === sub.countyName && other.slug !== sub.slug)),
     });
     finishPage(subHtml, `<h1>${escapeHtml(subCountyHeading(sub, district.name))}</h1>`);
     const bytes = writePage(join('district', district.slug, sub.slug, 'index.html'), subHtml);
@@ -510,7 +595,7 @@ for (const district of districts) {
             },
           },
         ]),
-        body: parishBody(parish, sub, district),
+        body: parishBody(parish, sub, district, sub.parishes.filter((other) => other.slug !== parish.slug)),
       });
       finishPage(parishHtml, `<h1>${escapeHtml(parishHeading(parish, sub, district))}</h1>`);
       const parishSize = writePage(join('district', district.slug, sub.slug, parish.slug, 'index.html'), parishHtml);
