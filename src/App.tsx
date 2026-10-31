@@ -8,23 +8,103 @@ import { useGeolocation } from './hooks/useGeolocation';
 import { search, loadIndex, getIndex, type LocationEntry, type LocationType } from './utils/search';
 
 type FilterOption = LocationType | 'all';
-type View = { kind: 'search' } | { kind: 'detail'; entry: LocationEntry; history: LocationEntry[] };
+type View =
+  | { kind: 'search' }
+  | { kind: 'districts' }
+  | { kind: 'detail'; entry: LocationEntry; history: LocationEntry[] };
+
+const HOME_TITLE = 'Where in Uganda? — Find Your Village, Parish & Sub-county for Documents';
+
+/** Keep in sync with districtSlug() in scripts/prerender.mjs */
+function districtSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function districtTitle(name: string): string {
+  return `${name} District, Uganda: counties, sub-counties and parishes | Where in Uganda?`;
+}
+
+function normalizePath(pathname: string): string {
+  return pathname.replace(/\/+$/, '') || '/';
+}
+
+function districtSlugFromPath(pathname: string): string | null {
+  const match = normalizePath(pathname).match(/^\/district\/([a-z0-9-]+)$/);
+  return match ? match[1] : null;
+}
+
+function routeKind(pathname: string): 'search' | 'districts' | 'district' {
+  const path = normalizePath(pathname);
+  if (path === '/districts') return 'districts';
+  if (districtSlugFromPath(path)) return 'district';
+  return 'search';
+}
+
+function findDistrict(index: LocationEntry[], slug: string): LocationEntry | undefined {
+  return index.find((entry) => entry.type === 'district' && districtSlug(entry.name) === slug);
+}
+
+function syncDocumentTitle(index: LocationEntry[] | null) {
+  const path = normalizePath(window.location.pathname);
+  if (path === '/districts') {
+    document.title = 'Districts in Uganda | Where in Uganda?';
+    return;
+  }
+  const slug = districtSlugFromPath(path);
+  if (slug) {
+    const entry = index ? findDistrict(index, slug) : undefined;
+    if (entry) document.title = districtTitle(entry.name);
+    return;
+  }
+  document.title = HOME_TITLE;
+}
+
+function viewForPath(index: LocationEntry[] | null): View {
+  const path = normalizePath(window.location.pathname);
+  if (path === '/districts') return { kind: 'districts' };
+  const slug = districtSlugFromPath(path);
+  if (!slug || !index) return { kind: 'search' };
+  const entry = findDistrict(index, slug);
+  return entry ? { kind: 'detail', entry, history: [] } : { kind: 'search' };
+}
 
 export default function App() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterOption>('all');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [view, setView] = useState<View>({ kind: 'search' });
+  const [view, setView] = useState<View>(() =>
+    routeKind(window.location.pathname) === 'districts' ? { kind: 'districts' } : { kind: 'search' }
+  );
   const [indexLoaded, setIndexLoaded] = useState(false);
   const [indexError, setIndexError] = useState('');
+  const [directory, setDirectory] = useState<LocationEntry[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { geoState, geoResult, geoError, locate, clearGeo, supported } = useGeolocation();
 
   useEffect(() => {
     loadIndex()
-      .then(() => setIndexLoaded(true))
+      .then((index) => {
+        setIndexLoaded(true);
+        setDirectory(
+          index
+            .filter((entry) => entry.type === 'district')
+            .sort((a, b) => a.name.localeCompare(b.name, 'en')),
+        );
+        setView(viewForPath(index));
+        syncDocumentTitle(index);
+      })
       .catch((e) => setIndexError(String(e)));
+  }, []);
+
+  useEffect(() => {
+    function onPopState() {
+      const index = getIndex();
+      setView(viewForPath(index));
+      syncDocumentTitle(index);
+    }
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
   useEffect(() => {
@@ -47,10 +127,31 @@ export default function App() {
       }
       return { kind: 'detail', entry, history: [] };
     });
+    if (entry.type === 'district') {
+      const url = `/district/${districtSlug(entry.name)}`;
+      if (normalizePath(window.location.pathname) !== url) {
+        window.history.pushState({ district: districtSlug(entry.name) }, '', url);
+      }
+      document.title = districtTitle(entry.name);
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function goBack() {
+    if (view.kind === 'detail' && view.history.length === 0) {
+      const slug = districtSlugFromPath(window.location.pathname);
+      const state = window.history.state as { district?: string } | null;
+      if (slug && state?.district === slug) {
+        window.history.back();
+        return;
+      }
+      if (slug) window.history.replaceState(null, '', '/');
+      setView({ kind: 'search' });
+      syncDocumentTitle(getIndex());
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     setView((prev) => {
       if (prev.kind !== 'detail') return prev;
       if (prev.history.length > 0) {
@@ -63,7 +164,9 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  const isDetail = view.kind === 'detail';
+  const route = routeKind(window.location.pathname);
+  const waitingForDistrict = route === 'district' && !indexLoaded && !indexError && view.kind !== 'detail';
+  const showSearch = view.kind === 'search' && !waitingForDistrict;
   const showNearYou = geoState === 'done' && geoResult && !debouncedQuery.trim();
 
   return (
@@ -77,7 +180,7 @@ export default function App() {
 
       <div style={{ maxWidth: '720px', margin: '0 auto', padding: '0 16px' }}>
         {/* Header */}
-        {!isDetail && (
+        {showSearch && (
           <div style={{ textAlign: 'center', paddingTop: '52px', marginBottom: '40px' }}>
             <div style={{
               display: 'inline-flex', alignItems: 'center', gap: '8px',
@@ -112,14 +215,64 @@ export default function App() {
         )}
 
         {/* Detail view */}
-        {isDetail && view.kind === 'detail' && (
+        {view.kind === 'detail' && (
           <div style={{ paddingTop: '32px' }}>
             <DetailView entry={view.entry} onBack={goBack} onSelect={openDetail} />
           </div>
         )}
 
+        {view.kind === 'districts' && (
+          <div style={{ paddingTop: '32px', paddingBottom: '72px' }}>
+            <a href="/" style={{ color: '#FCDC04', fontSize: '14px', textDecoration: 'none' }}>← Where in Uganda?</a>
+            <h1 style={{
+              fontFamily: "'Syne', sans-serif",
+              fontSize: 'clamp(32px, 6vw, 48px)',
+              lineHeight: 1.1,
+              margin: '16px 0',
+              color: '#F0EAD6',
+            }}>
+              Districts in Uganda
+            </h1>
+            {!indexLoaded && !indexError && (
+              <p style={{ color: 'rgba(240,234,214,0.45)' }}>Loading districts…</p>
+            )}
+            {indexLoaded && (
+              <>
+                <p style={{ color: 'rgba(240,234,214,0.55)', marginTop: 0 }}>
+                  {directory.length.toLocaleString()} districts. Open one for its counties and sub-counties.
+                </p>
+                <ul style={{ columns: 2, paddingLeft: '1.2em', margin: 0 }}>
+                  {directory.map((entry) => (
+                    <li key={entry.id} style={{ margin: '4px 0' }}>
+                      <a href={`/district/${districtSlug(entry.name)}`} style={{ color: '#FCDC04', textDecoration: 'none' }}>
+                        {entry.name} District
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
+
+        {waitingForDistrict && (
+          <p style={{ paddingTop: '48px', textAlign: 'center', color: 'rgba(240,234,214,0.45)' }}>
+            Loading district…
+          </p>
+        )}
+
+        {indexError && !showSearch && (
+          <div style={{
+            margin: '24px 0', padding: '16px', borderRadius: '12px',
+            background: 'rgba(200,16,26,0.12)', border: '1px solid rgba(200,16,26,0.25)',
+            color: '#E87070', fontSize: '14px',
+          }}>
+            Failed to load location data: {indexError}
+          </div>
+        )}
+
         {/* Search view */}
-        {!isDetail && (
+        {showSearch && (
           <div style={{ paddingBottom: '96px' }}>
             {/* Loading */}
             {!indexLoaded && !indexError && (
