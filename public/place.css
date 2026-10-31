@@ -55,8 +55,6 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
   white-space: nowrap; letter-spacing: -0.3px;
 }
 .find { display: flex; flex: 1 1 220px; gap: 8px; margin: 0; min-width: 0; }
-body.home .topbar .find { display: none; }
-body.home.show-find .topbar .find { display: flex; }
 .hero-find { flex: 1 1 100%; width: 100%; margin: 4px 0 20px; }
 .hero-find input { min-height: 52px; border-radius: 16px; }
 .find input {

@@ -373,9 +373,18 @@ const template = readFileSync(templatePath, 'utf8');
 if (!/<script type="module"/.test(template)) {
   throw new Error('dist/index.html is missing the app script. Run vite build first.');
 }
+const headerSearch = `<form class="find" id="site-find" action="/" method="get" role="search">
+        <label class="sr" for="site-search">Search places</label>
+        <input id="site-search" name="q" type="search" placeholder="Village, parish, district…" enterkeyhint="search" autocomplete="off" />
+        <button type="submit">Search</button>
+      </form>`;
 const shell = compileTemplate(template)
   .replace(/\s*<script type="module"[\s\S]*?<\/script>/, '')
-  .replace('<body class="home">', '<body>');
+  .replace('<body class="home">', '<body>')
+  .replace(
+    '<a class="brand" href="/">Where in Uganda?</a>',
+    `<a class="brand" href="/">Where in Uganda?</a>\n      ${headerSearch}`,
+  );
 
 const sourceDistricts = loadJson('districts.json');
 const sourceCounties = loadJson('counties.json');
@@ -693,6 +702,15 @@ for (const district of districts) {
 }
 if (!homepage.includes('How do I find my parish for NIN registration?') || !homepage.includes('"@type": "WebSite"')) {
   throw new Error('Homepage is missing its guide text or WebSite structured data');
+}
+if (!homepage.includes('action="/"') || !homepage.includes('name="q"') || !homepage.includes('search_term_string')) {
+  throw new Error('Homepage search form must submit to /?q=');
+}
+if (homepage.includes('id="site-find"') || homepage.includes('id="site-search"')) {
+  throw new Error('Homepage still includes the header search form');
+}
+if (!shell.includes('id="site-find"')) {
+  throw new Error('Place pages are missing the header search form');
 }
 writeFileSync(templatePath, homepage);
 

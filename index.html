@@ -150,11 +150,6 @@
     <div class="flag" aria-hidden="true"><span style="background:#1a1a1a"></span><span style="background:#FCDC04"></span><span style="background:#C8101A"></span><span style="background:#1a1a1a"></span><span style="background:#FCDC04"></span><span style="background:#C8101A"></span></div>
     <header class="topbar">
       <a class="brand" href="/">Where in Uganda?</a>
-      <form class="find" id="site-find" action="/" method="get" role="search">
-        <label class="sr" for="site-search">Search places</label>
-        <input id="site-search" name="q" type="search" placeholder="Village, parish, district…" enterkeyhint="search" autocomplete="off" />
-        <button type="submit">Search</button>
-      </form>
     </header>
     <div id="root">
       <main id="content" class="place">
@@ -162,7 +157,7 @@
         <p class="lede">Filling in a NIN or NIRA registration, a KCCA document, or a school form? Search the place you know and read off the village, parish, sub-county, county and district that belong with it.</p>
         <form class="find hero-find" id="hero-search" action="/" method="get" role="search">
           <label class="sr" for="hero-q">Search places</label>
-          <input id="hero-q" name="q" type="search" placeholder="Village, parish, district…" enterkeyhint="search" autocomplete="off" />
+          <input id="hero-q" name="q" type="search" placeholder="Type your village, parish, town or district…" enterkeyhint="search" autocomplete="off" />
           <button type="submit">Search</button>
         </form>
         <!-- home-browse -->
@@ -240,29 +235,6 @@
           fallbackCopy();
         }
       });
-      (function () {
-        if (!document.body.classList.contains('home') || !('IntersectionObserver' in window)) return;
-        var observer = null;
-        function watch() {
-          var hero = document.getElementById('hero-search');
-          if (!hero) return;
-          if (observer) observer.disconnect();
-          document.body.classList.remove('show-find');
-          observer = new IntersectionObserver(function (entries) {
-            var current = document.getElementById('hero-search');
-            if (!current || current.getBoundingClientRect().height < 20) {
-              document.body.classList.remove('show-find');
-              return;
-            }
-            var visible = entries.some(function (entry) { return entry.isIntersecting; });
-            document.body.classList.toggle('show-find', !visible);
-          });
-          observer.observe(hero);
-        }
-        watch();
-        var root = document.getElementById('root');
-        if (root) new MutationObserver(watch).observe(root, { childList: true });
-      })();
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
