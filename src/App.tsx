@@ -5,6 +5,7 @@ import ResultCard from './components/ResultCard';
 import DetailView from './components/DetailView';
 import Credits from './components/Credits';
 import { PlaceFrame, type Crumb, type FormField } from './components/PlaceFrame.tsx';
+import { HomeDirectory, HomeGuide } from './components/HomeDirectory.tsx';
 import { useGeolocation } from './hooks/useGeolocation';
 import { search, loadIndex, getIndex, type LocationEntry, type LocationType } from './utils/search';
 import { assignGroupedSlugs, assignSubCountySlugs, districtTitle, parishTitle, slugify, subCountyTitle, type AssignedSubCountySlug } from './utils/placeSlugs.ts';
@@ -288,8 +289,10 @@ export default function App() {
 
   const { geoState, geoResult, geoError, locate, clearGeo, supported } = useGeolocation();
 
-  useEffect(() => {
-    loadIndex()
+  const indexRequest = useRef<Promise<void> | null>(null);
+  function ensureIndex() {
+    if (getIndex() || indexRequest.current) return;
+    indexRequest.current = loadIndex()
       .then((index) => {
         setIndexLoaded(true);
         setDirectory(
@@ -300,7 +303,22 @@ export default function App() {
         setView(viewForPath(index));
         syncDocumentTitle(index);
       })
-      .catch((e) => setIndexError(String(e)));
+      .catch((e) => {
+        indexRequest.current = null;
+        setIndexError(String(e));
+      });
+  }
+
+  useEffect(() => {
+    if (queryFromLocation()) ensureIndex();
+    const input = document.querySelector<HTMLInputElement>('#site-search');
+    const start = () => ensureIndex();
+    input?.addEventListener('focus', start);
+    input?.addEventListener('input', start);
+    return () => {
+      input?.removeEventListener('focus', start);
+      input?.removeEventListener('input', start);
+    };
   }, []);
 
   useEffect(() => {
@@ -434,21 +452,25 @@ export default function App() {
 
             <h1 style={{
               fontFamily: "'Syne', sans-serif",
-              fontSize: 'clamp(36px, 10vw, 60px)',
               fontWeight: 800, lineHeight: 1.05, letterSpacing: '-1.5px',
               color: '#F0EAD6', margin: '0 0 12px',
             }}>
-              Where in{' '}
-              <span style={{
-                background: 'linear-gradient(130deg, #FCDC04 0%, #E8841A 40%, #C8101A 100%)',
-                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
-              }}>
-                Uganda?
+              <span style={{ display: 'block', fontSize: 'clamp(36px, 10vw, 60px)' }}>
+                Where in{' '}
+                <span style={{
+                  background: 'linear-gradient(130deg, #FCDC04 0%, #E8841A 40%, #C8101A 100%)',
+                  WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+                }}>
+                  Uganda?
+                </span>
+              </span>{' '}
+              <span style={{ display: 'block', fontSize: 'clamp(18px, 4.8vw, 28px)', marginTop: '8px' }}>
+                Find your village, parish, sub-county and district
               </span>
             </h1>
 
-            <p style={{ color: 'rgba(240,234,214,0.45)', fontSize: '15px', maxWidth: '440px', margin: '0 auto', lineHeight: 1.6 }}>
-              Find your village, parish, sub-county and district — perfect for NIN registration, NIRA, KCCA forms and any official document.
+            <p className="lede" style={{ maxWidth: '440px', margin: '0 auto 8px' }}>
+              Filling in a NIN or NIRA registration, a KCCA document, or a school form? Search the place you know and read off the village, parish, sub-county, county and district that belong with it.
             </p>
           </div>
         )}
@@ -525,25 +547,21 @@ export default function App() {
         {/* Search view */}
         {showSearch && (
           <div style={{ paddingBottom: '96px' }}>
-            {/* Loading */}
-            {!indexLoaded && !indexError && (
-              <div style={{ marginBottom: '24px' }}>
-                <div style={{
-                  width: '100%', borderRadius: '16px', padding: '20px 24px',
-                  background: 'rgba(252,220,4,0.04)', border: '1px solid rgba(252,220,4,0.10)',
-                  color: 'rgba(240,234,214,0.35)', fontSize: '16px',
-                  display: 'flex', alignItems: 'center', gap: '12px',
-                }}>
-                  <span style={{
-                    display: 'inline-block', width: '14px', height: '14px', borderRadius: '50%',
-                    border: '2px solid rgba(252,220,4,0.25)', borderTopColor: '#FCDC04',
-                    animation: 'spin 0.8s linear infinite', flexShrink: 0,
-                  }} />
-                  Loading 84,000+ Uganda locations…
-                </div>
-              </div>
+            <div style={{ marginBottom: '16px' }}>
+              <SearchBar
+                value={query}
+                onChange={(v) => { ensureIndex(); setQuery(v); if (v) clearGeo(); }}
+                onFocus={ensureIndex}
+                resultCount={results.length}
+                totalIndexed={totalIndexed}
+                geoState={geoState}
+                onLocate={() => { ensureIndex(); locate(); }}
+                supported={supported}
+              />
+            </div>
+            {query.trim() && !indexLoaded && !indexError && (
+              <p className="lede">Loading locations…</p>
             )}
-
             {indexError && (
               <div style={{
                 marginBottom: '24px', padding: '16px', borderRadius: '12px',
@@ -553,23 +571,15 @@ export default function App() {
                 Failed to load location data: {indexError}
               </div>
             )}
-
-            {indexLoaded && (
+            {indexLoaded && query.trim() && (
+              <div style={{ marginBottom: '28px' }}>
+                <FilterPills active={filter} onChange={setFilter} />
+              </div>
+            )}
+            {!debouncedQuery.trim() && !showNearYou && (
               <>
-                <div style={{ marginBottom: '16px' }}>
-                  <SearchBar
-                    value={query}
-                    onChange={(v) => { setQuery(v); if (v) clearGeo(); }}
-                    resultCount={results.length}
-                    totalIndexed={totalIndexed}
-                    geoState={geoState}
-                    onLocate={locate}
-                    supported={supported}
-                  />
-                </div>
-                <div style={{ marginBottom: '28px' }}>
-                  <FilterPills active={filter} onChange={setFilter} />
-                </div>
+                <HomeDirectory />
+                <HomeGuide />
               </>
             )}
 
@@ -661,19 +671,6 @@ export default function App() {
 
                 {/* Divider before main search */}
                 <div style={{ borderTop: '1px solid rgba(252,220,4,0.08)', marginTop: '24px' }} />
-              </div>
-            )}
-
-            {/* Idle prompt — only shown when no geo result and no query */}
-            {indexLoaded && !debouncedQuery.trim() && !showNearYou && geoState !== 'error' && (
-              <div style={{ marginTop: '60px', textAlign: 'center' }}>
-                <div style={{ fontSize: '52px', marginBottom: '16px' }}>🗺️</div>
-                <p style={{ fontFamily: "'Syne', sans-serif", fontSize: '18px', fontWeight: 600, color: 'rgba(240,234,214,0.40)', marginBottom: '8px' }}>
-                  Type your village or area name
-                </p>
-                <p style={{ fontSize: '13px', color: 'rgba(240,234,214,0.22)' }}>
-                  {totalIndexed.toLocaleString()} villages, parishes & districts · or tap <em>Use my location</em>
-                </p>
               </div>
             )}
 

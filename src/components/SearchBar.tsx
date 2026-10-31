@@ -7,6 +7,7 @@ interface Props {
   totalIndexed: number;
   geoState: GeoState;
   onLocate: () => void;
+  onFocus?: () => void;
   supported: boolean;
 }
 
@@ -18,7 +19,7 @@ const GEO_LABEL: Record<GeoState, string> = {
   error:      'Use my location',
 };
 
-export default function SearchBar({ value, onChange, resultCount, totalIndexed, geoState, onLocate, supported }: Props) {
+export default function SearchBar({ value, onChange, resultCount, totalIndexed, geoState, onLocate, onFocus, supported }: Props) {
   const busy = geoState === 'requesting' || geoState === 'locating';
 
   return (
@@ -41,7 +42,6 @@ export default function SearchBar({ value, onChange, resultCount, totalIndexed, 
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Type your village, parish, town or district…"
-          autoFocus
           style={{
             width: '100%',
             background: 'rgba(252,220,4,0.05)',
@@ -56,6 +56,7 @@ export default function SearchBar({ value, onChange, resultCount, totalIndexed, 
             boxSizing: 'border-box',
           }}
           onFocus={(e) => {
+            onFocus?.();
             e.currentTarget.style.borderColor = 'rgba(252,220,4,0.5)';
             e.currentTarget.style.background = 'rgba(252,220,4,0.08)';
           }}
@@ -92,7 +93,7 @@ export default function SearchBar({ value, onChange, resultCount, totalIndexed, 
             ? resultCount === 0
               ? 'No results found'
               : `${resultCount} result${resultCount !== 1 ? 's' : ''} from ${totalIndexed.toLocaleString()} locations`
-            : <span style={{ color: 'rgba(240,234,214,0.20)' }}>{totalIndexed.toLocaleString()} locations ready</span>
+            : <span style={{ color: 'rgba(240,234,214,0.55)' }}>{totalIndexed > 0 ? `${totalIndexed.toLocaleString()} locations ready` : 'Type to search'}</span>
           }
         </p>
 

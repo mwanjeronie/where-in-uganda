@@ -1,15 +1,13 @@
 export type LocationType = 'district' | 'county' | 'sub_county' | 'parish' | 'village';
 
-// Compact format stored in search-index.json
-// t: 'd'=district, 'c'=county, 'sc'=sub_county, 'p'=parish, 'v'=village
-interface RawEntry {
-  id: string;
-  n: string;       // name
-  t: string;       // type code
-  b: string[];     // breadcrumb (full path including self as last item)
-  r: string;       // region
-  s: string;       // district size (sq km)
-  di?: string;     // district name (for non-district entries)
+// Packed search-index.json:
+// s: string table
+// i: [nameIndex, typeCode, numericId, breadcrumbIndexes, regionIndex?, size?]
+// Region and district size are stored only on district rows. Breadcrumbs omit the place itself.
+type PackedItem = [number, string, number, number[], number?, string?];
+interface PackedIndex {
+  s: string[];
+  i: PackedItem[];
 }
 
 export interface LocationEntry {
@@ -54,18 +52,42 @@ export async function loadIndex(): Promise<LocationEntry[]> {
   _loading = fetch('/search-index.json')
     .then((r) => {
       if (!r.ok) throw new Error(`Failed to load search index: ${r.status}`);
-      return r.json() as Promise<RawEntry[]>;
+      return r.json() as Promise<PackedIndex>;
     })
-    .then((raw) => {
-      _index = raw.map((e) => ({
-        id: e.id,
-        name: e.n,
-        type: TYPE_MAP[e.t] ?? 'village',
-        breadcrumb: e.b.slice(0, -1),  // exclude self; self = name
-        region: e.r,
-        districtSize: e.s,
-        districtName: e.t === 'd' ? e.n : (e.di ?? e.b[0] ?? ''),
-      }));
+    .then((packed) => {
+      const strings = packed.s;
+      const preliminary = packed.i.map((row) => {
+        const name = strings[row[0]] ?? '';
+        const typeCode = row[1];
+        const type = TYPE_MAP[typeCode] ?? 'village';
+        const breadcrumb = row[3].map((index) => strings[index] ?? '');
+        return {
+          id: `${typeCode}-${row[2]}`,
+          name,
+          type,
+          breadcrumb,
+          region: row[4] !== undefined ? (strings[row[4]] ?? '') : '',
+          districtSize: row[5] ?? '',
+        };
+      });
+      const districts = new Map<string, { region: string; size: string }>();
+      for (const entry of preliminary) {
+        if (entry.type === 'district') {
+          districts.set(entry.name, { region: entry.region, size: entry.districtSize });
+        }
+      }
+      _index = preliminary.map((entry) => {
+        const parent = entry.type === 'district' ? undefined : districts.get(entry.breadcrumb[0] ?? '');
+        return {
+          id: entry.id,
+          name: entry.name,
+          type: entry.type,
+          breadcrumb: entry.breadcrumb,
+          region: entry.type === 'district' ? entry.region : (parent?.region ?? ''),
+          districtSize: entry.type === 'district' ? entry.districtSize : (parent?.size ?? ''),
+          districtName: entry.type === 'district' ? entry.name : (entry.breadcrumb[0] ?? ''),
+        };
+      });
       return _index;
     });
 

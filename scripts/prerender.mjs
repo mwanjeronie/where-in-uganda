@@ -656,6 +656,44 @@ for (const [name, xml] of Object.entries(sitemapFiles)) {
 }
 addedBytes += sitemapBytes;
 
+const POPULAR_DISTRICTS = ['Kampala', 'Wakiso', 'Mukono', 'Mbarara', 'Gulu', 'Jinja', 'Masaka', 'Mbale', 'Arua', 'Lira'];
+
+function homeBrowseHtml(list) {
+  const byName = new Map(list.map((district) => [district.name, district]));
+  const popular = POPULAR_DISTRICTS.map((name) => byName.get(name)).filter(Boolean);
+  if (popular.length !== POPULAR_DISTRICTS.length) {
+    throw new Error('A popular district is missing from the directory');
+  }
+  const groups = new Map();
+  for (const district of list) {
+    const letter = district.name.slice(0, 1).toUpperCase();
+    const rows = groups.get(letter);
+    if (rows) rows.push(district);
+    else groups.set(letter, [district]);
+  }
+  const chips = (items) => `<div class="chips dense">${items.map((district) => `<a href="/district/${district.slug}">${escapeHtml(district.name)}</a>`).join('')}</div>`;
+  const sections = [...groups.entries()].map(([letter, items]) => `<h3 class="letter">${letter}</h3>\n${chips(items)}`).join('\n');
+  return `<section class="home-block" aria-label="Browse by district">
+          <h2>Popular</h2>
+          ${chips(popular)}
+          <h2>Browse by district</h2>
+          ${sections}
+        </section>`;
+}
+
+const browseMarker = '<!-- home-browse -->';
+if (!template.includes(browseMarker)) throw new Error('Homepage is missing the district browse marker');
+const homepage = template.replace(browseMarker, homeBrowseHtml(districts));
+for (const district of districts) {
+  if (!homepage.includes(`href="/district/${district.slug}"`)) {
+    throw new Error(`Homepage is missing /district/${district.slug}`);
+  }
+}
+if (!homepage.includes('How do I find my parish for NIN registration?') || !homepage.includes('"@type": "WebSite"')) {
+  throw new Error('Homepage is missing its guide text or WebSite structured data');
+}
+writeFileSync(templatePath, homepage);
+
 const summary = {
   districtPages: districts.length,
   subCountyPages,

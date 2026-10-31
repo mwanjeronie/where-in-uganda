@@ -1,4 +1,4 @@
-import { search, type LocationEntry } from './search';
+import { loadIndex, search, type LocationEntry } from './search';
 
 interface NominatimAddress {
   village?: string;
@@ -37,6 +37,7 @@ const CANDIDATE_FIELDS: (keyof NominatimAddress)[] = [
 ];
 
 export async function reverseGeocode(lat: number, lon: number): Promise<ReverseGeocodeResult> {
+  await loadIndex();
   const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1`;
 
   const res = await fetch(url, {
